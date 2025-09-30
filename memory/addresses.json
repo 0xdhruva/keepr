@@ -1,0 +1,10 @@
+{
+  "PROGRAM_ID": "",
+  "USDC_MINT": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "MULTISIG_ADDR": "",
+  "notes": {
+    "USDC_MINT": "Circle USDC on Solana mainnet",
+    "PROGRAM_ID": "Set after mainnet deploy",
+    "MULTISIG_ADDR": "Upgrade authority, set before mainnet deploy"
+  }
+}

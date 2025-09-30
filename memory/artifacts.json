@@ -1,0 +1,12 @@
+{
+  "preview_url": "http://localhost:3000",
+  "production_url": "",
+  "idl_path": "",
+  "explorer_links": [],
+  "screenshots": [
+    "Gate A: Landing page with wallet connect (pending screenshot)",
+    "Gate A: MAINNET badge in header (pending screenshot)",
+    "Gate A: Phantom wallet connected state (pending screenshot)"
+  ],
+  "last_updated": "2025-09-30T11:16:50+05:30"
+}
