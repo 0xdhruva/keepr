@@ -19,6 +19,11 @@ export interface VaultMeta {
   name: string;
   createdAt: number;
   lastRefreshed: number;
+  unlockUnix: number;
+  amountLocked: number;
+  beneficiary: string;
+  creator: string;
+  released?: boolean;
 }
 
 export interface ActivityLogEntry {

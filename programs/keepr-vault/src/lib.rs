@@ -62,7 +62,7 @@ pub mod keepr_vault {
         ctx: Context<CreateVault>,
         beneficiary: Pubkey,
         unlock_unix: i64,
-        name_hash: [u8; 32],
+        name_hash: Vec<u8>,
     ) -> Result<()> {
         let config = &ctx.accounts.config;
         let vault = &mut ctx.accounts.vault;
@@ -154,6 +154,7 @@ pub mod keepr_vault {
     }
 
     /// Release funds to beneficiary (time-locked)
+    /// Note: Any signer can call this; PDA signs the transfer via seeds
     pub fn release(ctx: Context<Release>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
         let clock = Clock::get()?;
@@ -197,6 +198,40 @@ pub mod keepr_vault {
             to: vault.beneficiary,
         });
 
+        Ok(())
+    }
+
+    /// Close vault and reclaim rent (creator only, post-release)
+    pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
+        let vault = &ctx.accounts.vault;
+
+        // Safety checks
+        require!(vault.released, KeeprError::NotReleased);
+        require!(vault.amount_locked == 0, KeeprError::VaultNotEmpty);
+
+        // Close token account first (returns rent to creator)
+        let creator_key = vault.creator;
+        let vault_id = vault.vault_id;
+        let vault_bump = vault.bump;
+
+        let seeds = &[
+            b"vault",
+            creator_key.as_ref(),
+            &vault_id.to_le_bytes(),
+            &[vault_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+        let cpi_accounts = anchor_spl::token::CloseAccount {
+            account: ctx.accounts.vault_token_account.to_account_info(),
+            destination: ctx.accounts.creator.to_account_info(),
+            authority: vault.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+        anchor_spl::token::close_account(cpi_ctx)?;
+
+        // Vault account will be closed automatically via close constraint
         Ok(())
     }
 }
@@ -352,6 +387,30 @@ pub struct Release<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct CloseVault<'info> {
+    #[account(
+        mut,
+        close = creator,
+        seeds = [b"vault", creator.key().as_ref(), &vault.vault_id.to_le_bytes()],
+        bump = vault.bump,
+        has_one = creator
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        mut,
+        associated_token::mint = vault.usdc_mint,
+        associated_token::authority = vault
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub creator: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
 // ============================================================================
 // State
 // ============================================================================
@@ -382,7 +441,8 @@ pub struct Vault {
     pub unlock_unix: i64,
     pub released: bool,
     pub bump: u8,
-    pub name_hash: [u8; 32],
+    #[max_len(32)]
+    pub name_hash: Vec<u8>,
     pub vault_id: u64,
 }
 
@@ -442,4 +502,8 @@ pub enum KeeprError {
     InvalidBeneficiary,
     #[msg("Cannot deposit after unlock time.")]
     DepositAfterUnlock,
+    #[msg("Vault must be released before closing.")]
+    NotReleased,
+    #[msg("Vault still contains funds.")]
+    VaultNotEmpty,
 }

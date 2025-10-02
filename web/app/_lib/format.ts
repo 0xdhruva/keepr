@@ -23,7 +23,8 @@ export function parseUSDC(amount: string): number {
 /**
  * Format Solana address for display (truncate middle)
  */
-export function formatAddress(address: string, chars = 4): string {
+export function formatAddress(address: string | undefined, chars = 4): string {
+  if (!address) return 'Unknown';
   if (address.length <= chars * 2) return address;
   return `${address.slice(0, chars)}...${address.slice(-chars)}`;
 }

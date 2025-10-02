@@ -39,19 +39,27 @@ export default function VaultsPage() {
   const loadVaults = () => {
     // Load from localStorage
     const cache = getVaultCache();
-    
-    // Mock vault data for demonstration
-    const mockVaults: MockVault[] = cache.map((meta, index) => ({
-      vaultPda: meta.vaultPda,
-      name: meta.name,
-      amountLocked: (index + 1) * 10_000_000, // 10, 20, 30 USDC
-      unlockUnix: Math.floor(Date.now() / 1000) + (index + 1) * 3600, // 1, 2, 3 hours from now
-      beneficiary: publicKey?.toBase58() || '',
-      creator: publicKey?.toBase58() || '',
-      released: false,
-    }));
+    console.log('Vault cache from localStorage:', cache);
 
-    setVaults(mockVaults);
+    // Map vault data from cache, filter out incomplete data from old schema
+    const vaultData: MockVault[] = cache
+      .filter((meta) => {
+        const isValid = meta.amountLocked !== undefined && meta.unlockUnix !== undefined && meta.beneficiary !== undefined;
+        console.log('Vault validation:', meta.vaultPda, { isValid, amountLocked: meta.amountLocked, unlockUnix: meta.unlockUnix, beneficiary: meta.beneficiary });
+        return isValid;
+      })
+      .map((meta) => ({
+        vaultPda: meta.vaultPda,
+        name: meta.name,
+        amountLocked: meta.amountLocked,
+        unlockUnix: meta.unlockUnix,
+        beneficiary: meta.beneficiary,
+        creator: meta.creator,
+        released: meta.released || false,
+      }));
+
+    console.log('Final vault data:', vaultData);
+    setVaults(vaultData);
     setLoading(false);
   };
 

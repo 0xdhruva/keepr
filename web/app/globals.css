@@ -1,7 +1,31 @@
 @import "tailwindcss";
 
 @theme {
-  /* Pastel Palette - Inspired by your designs */
+  /* Primary Palette - Sage (Trust & Growth) */
+  --color-sage-50: #f6f8f6;
+  --color-sage-100: #e8ede8;
+  --color-sage-200: #d1ddd1;
+  --color-sage-300: #a8c4a8;
+  --color-sage-400: #8fa88f;
+  --color-sage-500: #6b8e6b;
+  --color-sage-600: #5a7a5a;
+  --color-sage-700: #3d5a3d;
+  --color-sage-800: #2d442d;
+  --color-sage-900: #1a2e1a;
+
+  /* Base Palette - Warm Neutral */
+  --color-warm-50: #fafaf9;
+  --color-warm-100: #f5f5f4;
+  --color-warm-200: #e7e5e4;
+  --color-warm-300: #d6d3d1;
+  --color-warm-400: #a8a29e;
+  --color-warm-500: #78716c;
+  --color-warm-600: #57534e;
+  --color-warm-700: #44403c;
+  --color-warm-800: #292524;
+  --color-warm-900: #1c1917;
+
+  /* Accent Palette - Lavender */
   --color-lavender-50: #f5f3ff;
   --color-lavender-100: #ede9fe;
   --color-lavender-200: #ddd6fe;
@@ -9,21 +33,49 @@
   --color-lavender-400: #a78bfa;
   --color-lavender-500: #8b5cf6;
   --color-lavender-600: #7c3aed;
-  
-  --color-mint-50: #f0fdf4;
-  --color-mint-100: #dcfce7;
-  --color-mint-200: #bbf7d0;
-  --color-mint-300: #86efac;
-  --color-mint-400: #4ade80;
-  --color-mint-500: #22c55e;
-  
+  --color-lavender-700: #6d28d9;
+  --color-lavender-800: #5b21b6;
+
+  /* Accent Palette - Amber (Locked) */
+  --color-amber-50: #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #92400e;
+
+  /* Accent Palette - Emerald (Success) */
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+
+  /* Accent Palette - Rose (Error) */
   --color-rose-50: #fff1f2;
   --color-rose-100: #ffe4e6;
   --color-rose-200: #fecdd3;
   --color-rose-300: #fda4af;
   --color-rose-400: #fb7185;
   --color-rose-500: #f43f5e;
-  
+  --color-rose-600: #e11d48;
+  --color-rose-700: #be123c;
+
+  /* Legacy colors for compatibility */
+  --color-mint-50: #f0fdf4;
+  --color-mint-100: #dcfce7;
+  --color-mint-200: #bbf7d0;
+  --color-mint-300: #86efac;
+  --color-mint-400: #4ade80;
+  --color-mint-500: #22c55e;
+
   /* Neutral Grays */
   --color-gray-50: #f9fafb;
   --color-gray-100: #f3f4f6;
@@ -35,15 +87,11 @@
   --color-gray-700: #374151;
   --color-gray-800: #1f2937;
   --color-gray-900: #111827;
-  
-  /* Dark buttons */
-  --color-dark: #1a1a1a;
-  --color-dark-hover: #2a2a2a;
-  
+
   /* Base Colors */
-  --color-background: #f9fafb;
-  --color-foreground: #1f2937;
-  
+  --color-background: #fafaf9;
+  --color-foreground: #1c1917;
+
   /* Typography */
   --font-sans: 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;

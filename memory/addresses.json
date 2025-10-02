@@ -1,10 +1,32 @@
 {
-  "PROGRAM_ID": "",
-  "USDC_MINT": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-  "MULTISIG_ADDR": "",
-  "notes": {
-    "USDC_MINT": "Circle USDC on Solana mainnet",
-    "PROGRAM_ID": "Set after mainnet deploy",
-    "MULTISIG_ADDR": "Upgrade authority, set before mainnet deploy"
+  "devnet": {
+    "PROGRAM_ID": "74v7NZh7A6SH9DmKZRC4tFUwaLvq19KfD1NGni62XQJK",
+    "CONFIG_PDA": "2ZLGQe7moMmjeS6D4bPQhUs8vqPQqqamXhQowPMVa71D",
+    "USDC_MINT_TEST": "BTYDiUpZuxzswKhbg8C8sJcYNjua4D7186rU2fzxUjjt",
+    "ADMIN": "GeQ3YtidFiviY7Bb7ZuZK3mEPV6XXhpmGvycH4s7dJ5S",
+    "notes": {
+      "PROGRAM_ID": "Deployed 2025-09-30, updated 2025-10-01 with close_vault",
+      "CONFIG_PDA": "Initialized with test USDC mint",
+      "USDC_MINT_TEST": "Test token (6 decimals) for devnet testing",
+      "ADMIN": "Config admin, controls pause/caps/mint"
+    }
+  },
+  "mainnet": {
+    "PROGRAM_ID": "",
+    "CONFIG_PDA": "",
+    "USDC_MINT": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "MULTISIG_ADDR": "",
+    "notes": {
+      "USDC_MINT": "Circle USDC on Solana mainnet",
+      "PROGRAM_ID": "Set after mainnet deploy",
+      "CONFIG_PDA": "Derived from program_id, seeds: ['config']",
+      "MULTISIG_ADDR": "Upgrade authority, set before mainnet deploy"
+    }
+  },
+  "pda_seeds": {
+    "config": "['config']",
+    "vault_counter": "['vault_counter', creator_pubkey]",
+    "vault": "['vault', creator_pubkey, vault_id_u64_le_bytes]",
+    "vault_token_account": "ATA(vault_pda, usdc_mint)"
   }
 }

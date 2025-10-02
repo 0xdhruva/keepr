@@ -5,6 +5,10 @@ import { useRouter, useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { formatUSDC, formatAddress, formatDateTime } from '../../../_lib/format';
 import { getVaultMeta, addActivityLog } from '../../../_lib/storage';
+import { connection, PROGRAM_ID, USDC_MINT } from '../../../_lib/solana';
+import { PublicKey, Transaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { releaseInstruction } from '../../../_lib/instructions';
 import Link from 'next/link';
 
 type Step = 'confirm' | 'processing' | 'success' | 'error';
@@ -19,7 +23,7 @@ interface VaultInfo {
 }
 
 export default function ReleasePage() {
-  const { connected, publicKey } = useWallet();
+  const { connected, publicKey, sendTransaction } = useWallet();
   const router = useRouter();
   const params = useParams();
   const vaultPda = params.vaultPda as string;
@@ -28,12 +32,13 @@ export default function ReleasePage() {
   const [vault, setVault] = useState<VaultInfo | null>(null);
   const [txSignature, setTxSignature] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (!connected) {
+    if (!connected && !loading) {
       router.push('/');
     }
-  }, [connected, router]);
+  }, [connected, loading, router]);
 
   useEffect(() => {
     if (connected && vaultPda) {
@@ -41,52 +46,139 @@ export default function ReleasePage() {
     }
   }, [connected, vaultPda]);
 
-  const loadVault = () => {
-    const meta = getVaultMeta(vaultPda);
-    
-    if (!meta) {
-      router.push('/vaults');
-      return;
+  const loadVault = async () => {
+    try {
+      // Try to load from localStorage first
+      const meta = getVaultMeta(vaultPda);
+
+      // Fetch vault data from blockchain
+      const vaultPubkey = new PublicKey(vaultPda);
+      const accountInfo = await connection.getAccountInfo(vaultPubkey);
+
+      if (!accountInfo) {
+        console.error('Vault account not found on-chain');
+        router.push('/vaults');
+        return;
+      }
+
+      // Decode vault data (skip 8-byte discriminator)
+      const data = accountInfo.data;
+      let offset = 8;
+
+      const creator = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      const beneficiary = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      // Skip usdc_mint (32) and vault_token_account (32)
+      offset += 64;
+
+      const amountLocked = Number(data.readBigUInt64LE(offset));
+      offset += 8;
+
+      const unlockUnix = Number(data.readBigInt64LE(offset));
+
+      const vaultInfo: VaultInfo = {
+        vaultPda,
+        name: meta?.name || 'Vault',
+        amountLocked,
+        unlockUnix,
+        beneficiary: beneficiary.toBase58(),
+        creator: creator.toBase58(),
+      };
+
+      console.log('Loaded vault from blockchain:', vaultInfo);
+      setVault(vaultInfo);
+      setLoading(false);
+    } catch (error) {
+      console.error('Failed to load vault:', error);
+      setErrorMessage('Failed to load vault data');
+      setStep('error');
+      setLoading(false);
     }
-
-    // Mock vault info
-    const mockVault: VaultInfo = {
-      vaultPda,
-      name: meta.name,
-      amountLocked: 10_000_000, // 10 USDC
-      unlockUnix: Math.floor(Date.now() / 1000) - 3600, // Already unlocked (1 hour ago)
-      beneficiary: publicKey?.toBase58() || '',
-      creator: publicKey?.toBase58() || '',
-    };
-
-    setVault(mockVault);
   };
 
   const handleRelease = async () => {
+    if (!publicKey || !sendTransaction || !vault) {
+      setErrorMessage('Wallet not connected or vault not loaded');
+      setStep('error');
+      return;
+    }
+
     setStep('processing');
 
     try {
-      // Note: This is a placeholder for the actual transaction
-      // In a real implementation, you would:
-      // 1. Get the program instance
-      // 2. Derive PDAs
-      // 3. Build release transaction
-      // 4. Send and confirm transaction
+      const programId = new PublicKey(PROGRAM_ID);
+      const vaultPdaKey = new PublicKey(vaultPda);
+      const beneficiaryKey = new PublicKey(vault.beneficiary);
+      const creatorKey = new PublicKey(vault.creator);
 
-      // Simulate transaction delay
-      await new Promise(resolve => setTimeout(resolve, 2500));
+      // Derive vault counter PDA
+      const [counterPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('vault_counter'), creatorKey.toBuffer()],
+        programId
+      );
 
-      // Mock transaction signature
-      const mockSignature = '5' + 'x'.repeat(87); // Valid-looking signature
-      setTxSignature(mockSignature);
+      // Derive vault token account
+      const vaultTokenAccount = await getAssociatedTokenAddress(
+        new PublicKey(USDC_MINT),
+        vaultPdaKey,
+        true // allowOwnerOffCurve = true for PDA
+      );
+
+      // Get beneficiary's USDC token account
+      const beneficiaryUsdcAta = await getAssociatedTokenAddress(
+        new PublicKey(USDC_MINT),
+        beneficiaryKey
+      );
+
+      // Build release instruction
+      const instruction = await releaseInstruction({
+        vault: vaultPdaKey,
+        counter: counterPda,
+        vaultTokenAccount,
+        usdcMint: new PublicKey(USDC_MINT),
+        beneficiaryUsdcAta,
+        beneficiary: publicKey,  // Current user must be the beneficiary
+        programId,
+      });
+
+      // Create and send transaction
+      const transaction = new Transaction().add(instruction);
+
+      // Simulate first to get better error messages
+      console.log('Simulating release transaction...');
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+
+      const simulation = await connection.simulateTransaction(transaction);
+      console.log('Simulation result:', simulation);
+
+      if (simulation.value.err) {
+        console.error('Simulation failed:', simulation.value.err);
+        console.error('Simulation logs:', simulation.value.logs);
+        throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}\nLogs: ${simulation.value.logs?.join('\n')}`);
+      }
+
+      console.log('Sending release transaction...');
+      const signature = await sendTransaction(transaction, connection);
+      console.log('Transaction sent:', signature);
+
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, 'confirmed');
+      console.log('Transaction confirmed!');
+
+      setTxSignature(signature);
 
       // Log activity
       addActivityLog({
         vaultPda,
         type: 'released',
         timestamp: Date.now(),
-        signature: mockSignature,
-        amount: vault?.amountLocked,
+        signature,
+        amount: vault.amountLocked,
       });
 
       setStep('success');
@@ -102,11 +194,29 @@ export default function ReleasePage() {
     setStep('confirm');
   };
 
-  if (!connected || !publicKey || !vault) {
+  if (!connected || !publicKey) {
     return null;
   }
 
-  const explorerUrl = `https://explorer.solana.com/tx/${txSignature}?cluster=mainnet`;
+  if (loading || !vault) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="max-w-2xl mx-auto">
+          <div className="p-12 bg-gray-900/50 rounded-xl border border-gray-800 text-center">
+            <div className="w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+              <svg className="w-8 h-8 text-purple-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold mb-2">Loading Vault...</h2>
+            <p className="text-gray-400">Fetching vault data from blockchain</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const explorerUrl = `https://explorer.solana.com/tx/${txSignature}?cluster=devnet`;
 
   return (
     <div className="container mx-auto px-4 py-8">

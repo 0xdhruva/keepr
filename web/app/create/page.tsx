@@ -8,17 +8,18 @@ import { AddressInput } from '../_components/AddressInput';
 import { DateTimeInput } from '../_components/DateTimeInput';
 import { validateVaultForm, VaultFormData } from '../_lib/validation';
 import { formatDateTime } from '../_lib/format';
-import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
+import { Identicon } from '../_components/Identicon';
+import { chunkAddress, getAddressLast4 } from '../_lib/identicon';
+import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { saveVaultMeta, addActivityLog, updateLastSeen } from '../_lib/storage';
-import { AnchorProvider, Program, BN } from '@coral-xyz/anchor';
 import { connection, PROGRAM_ID, USDC_MINT } from '../_lib/solana';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import idl from '../_lib/keepr_vault.json';
+import { createVaultInstruction, depositUsdcInstruction } from '../_lib/instructions';
 
 type Step = 'form' | 'review' | 'processing' | 'success';
 
 export default function CreateVaultPage() {
-  const { connected, publicKey, wallet, signTransaction, signAllTransactions } = useWallet();
+  const { connected, publicKey, sendTransaction } = useWallet();
   const router = useRouter();
 
   const [step, setStep] = useState<Step>('form');
@@ -31,6 +32,8 @@ export default function CreateVaultPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [txSignature, setTxSignature] = useState<string>('');
   const [vaultPda, setVaultPda] = useState<string>('');
+  const [beneficiaryConfirm, setBeneficiaryConfirm] = useState<string>('');
+  const [confirmError, setConfirmError] = useState<string>('');
 
   useEffect(() => {
     if (!connected) {
@@ -76,44 +79,35 @@ export default function CreateVaultPage() {
   };
 
   const handleBack = () => {
+    setBeneficiaryConfirm('');
+    setConfirmError('');
     setStep('form');
   };
 
   const handleConfirm = async () => {
+    // Validate beneficiary confirmation
+    const last4 = formData.beneficiary.slice(-4).toUpperCase();
+    if (beneficiaryConfirm.toUpperCase() !== last4) {
+      setConfirmError('Confirmation does not match. Please type the last 4 characters.');
+      return;
+    }
+
     setStep('processing');
 
     try {
-      if (!publicKey || !signTransaction) {
+      if (!publicKey || !sendTransaction) {
         throw new Error('Wallet not connected');
       }
 
-      // Create wallet interface for Anchor
-      const walletInterface = {
-        publicKey,
-        signTransaction,
-        signAllTransactions: signAllTransactions || (async (txs) => {
-          const signed = [];
-          for (const tx of txs) {
-            signed.push(await signTransaction(tx));
-          }
-          return signed;
-        }),
-      };
-
-      // Create Anchor provider
-      const provider = new AnchorProvider(connection, walletInterface as any, {
-        commitment: 'confirmed',
-      });
-
-      // Create program instance
       const programId = new PublicKey(PROGRAM_ID);
-      const program = new Program(idl as any, provider);
+      console.log('Program ID:', programId.toBase58());
+      console.log('Wallet publicKey:', publicKey.toBase58());
 
       // Parse unlock time to Unix timestamp
       const unlockUnix = Math.floor(new Date(formData.unlockTime).getTime() / 1000);
-      
+
       // Parse amount to lamports (USDC has 6 decimals)
-      const amountLamports = new BN(parseFloat(formData.amount) * 1_000_000);
+      const amountLamports = Math.floor(parseFloat(formData.amount) * 1_000_000);
 
       // Hash the vault name (SHA256)
       const encoder = new TextEncoder();
@@ -174,52 +168,83 @@ export default function CreateVaultPage() {
         publicKey
       );
 
-      // Transaction 1: Create vault
-      const createTx = await program.methods
-        .createVault(new PublicKey(formData.beneficiary), new BN(unlockUnix), nameHash)
-        .accounts({
-          config: configPda,
-          counter: counterPda,
-          vault: vaultPda,
-          vaultTokenAccount,
-          usdcMint: new PublicKey(USDC_MINT),
-          creator: publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
+      // Build create vault instruction
+      const createInstruction = await createVaultInstruction({
+        config: configPda,
+        counter: counterPda,
+        vault: vaultPda,
+        vaultTokenAccount,
+        usdcMint: new PublicKey(USDC_MINT),
+        creator: publicKey,
+        beneficiary: new PublicKey(formData.beneficiary),
+        unlockUnix,
+        nameHash,
+        programId,
+      });
 
-      console.log('Vault created:', createTx);
+      // Build deposit instruction
+      const depositInstruction = await depositUsdcInstruction({
+        config: configPda,
+        vault: vaultPda,
+        counter: counterPda,
+        vaultTokenAccount,
+        usdcMint: new PublicKey(USDC_MINT),
+        creatorUsdcAta: creatorTokenAccount,
+        creator: publicKey,
+        amount: amountLamports,
+        programId,
+      });
 
-      // Wait for confirmation and fetch the vault to get its actual ID
-      await connection.confirmTransaction(createTx, 'confirmed');
-      
-      // Fetch the vault account to get the vault_id
-      const vaultAccount = await (program.account as any).vault.fetch(vaultPda);
-      const actualVaultId = vaultAccount.vaultId;
-      
-      console.log('Vault ID:', actualVaultId.toString());
+      // Create transaction with both instructions
+      const transaction = new Transaction().add(createInstruction, depositInstruction);
 
-      // Transaction 2: Deposit tokens (vault PDA is already correct since we derived it with nextVaultId)
-      const depositTx = await program.methods
-        .depositUsdc(amountLamports)
-        .accounts({
-          config: configPda,
-          vault: vaultPda,
-          counter: counterPda,
-          vaultTokenAccount,
-          usdcMint: new PublicKey(USDC_MINT),
-          creatorUsdcAta: creatorTokenAccount,
-          creator: publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+      // Simulate transaction first to get better error messages
+      console.log('Simulating transaction...');
+      console.log('Transaction instructions:', transaction.instructions.length);
+      console.log('Create instruction data length:', createInstruction.data.length);
+      console.log('Deposit instruction data length:', depositInstruction.data.length);
 
-      console.log('Tokens deposited:', depositTx);
+      try {
+        // Set recent blockhash and fee payer for simulation
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = publicKey;
+
+        const simulation = await connection.simulateTransaction(transaction);
+        console.log('Simulation result:', simulation);
+
+        if (simulation.value.err) {
+          console.error('Simulation failed:', simulation.value.err);
+          console.error('Simulation logs:', simulation.value.logs);
+          throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}\nLogs: ${simulation.value.logs?.join('\n')}`);
+        }
+      } catch (simError) {
+        console.error('Simulation error:', simError);
+        throw simError;
+      }
+
+      // Send and confirm transaction
+      console.log('Sending transaction...');
+      let signature: string;
+      try {
+        signature = await sendTransaction(transaction, connection);
+        console.log('Transaction sent:', signature);
+
+        // Wait for confirmation
+        const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+        console.log('Transaction confirmed!', confirmation);
+      } catch (sendError: any) {
+        console.error('Send transaction error:', sendError);
+        console.error('Error details:', {
+          message: sendError.message,
+          logs: sendError.logs,
+          err: sendError.err,
+        });
+        throw sendError;
+      }
 
       setVaultPda(vaultPda.toBase58());
-      setTxSignature(depositTx);
+      setTxSignature(signature);
 
       // Save to local storage
       saveVaultMeta({
@@ -227,20 +252,18 @@ export default function CreateVaultPage() {
         name: formData.name,
         createdAt: Date.now(),
         lastRefreshed: Date.now(),
+        unlockUnix,
+        amountLocked: parseFloat(formData.amount) * 1_000_000,
+        beneficiary: formData.beneficiary,
+        creator: publicKey.toBase58(),
+        released: false,
       });
 
       addActivityLog({
         vaultPda: vaultPda.toBase58(),
         type: 'created',
         timestamp: Date.now(),
-        signature: createTx,
-      });
-
-      addActivityLog({
-        vaultPda: vaultPda.toBase58(),
-        type: 'deposited',
-        timestamp: Date.now(),
-        signature: depositTx,
+        signature,
         amount: parseFloat(formData.amount) * 1_000_000,
       });
 
@@ -266,6 +289,8 @@ export default function CreateVaultPage() {
     setErrors({});
     setTxSignature('');
     setVaultPda('');
+    setBeneficiaryConfirm('');
+    setConfirmError('');
     setStep('form');
   };
 
@@ -383,10 +408,55 @@ export default function CreateVaultPage() {
                 </div>
 
                 <div>
-                  <p className="text-sm text-warm-500 mb-1">Beneficiary</p>
-                  <p className="text-sm font-mono bg-white px-3 py-2 rounded border border-warm-200 break-all text-warm-800">
-                    {formData.beneficiary}
+                  <p className="text-sm text-warm-500 mb-2">Beneficiary</p>
+                  <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-warm-200">
+                    <Identicon address={formData.beneficiary} size={56} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-warm-500 mb-1">Will receive funds after unlock</p>
+                      <p className="text-sm font-mono text-warm-900 break-all leading-relaxed">
+                        {chunkAddress(formData.beneficiary)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Beneficiary Confirmation */}
+                <div className="pt-2">
+                  <label htmlFor="beneficiary-confirm" className="block text-sm font-medium text-warm-700 mb-2">
+                    Confirm Beneficiary Address
+                    <span className="ml-2 text-xs text-warm-500 font-normal">
+                      (safety check)
+                    </span>
+                  </label>
+                  <p className="text-sm text-warm-600 mb-3">
+                    Type the last 4 characters: <span className="font-mono font-bold text-sage-600">{getAddressLast4(formData.beneficiary)}</span>
                   </p>
+                  <input
+                    id="beneficiary-confirm"
+                    type="text"
+                    value={beneficiaryConfirm}
+                    onChange={(e) => {
+                      setBeneficiaryConfirm(e.target.value);
+                      setConfirmError('');
+                    }}
+                    placeholder="Last 4 characters"
+                    maxLength={4}
+                    className={`w-full px-4 py-3 bg-white border rounded-lg text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 transition-all duration-200 font-mono text-base tracking-wider uppercase ${
+                      confirmError
+                        ? 'border-rose-500 focus:ring-rose-500 bg-rose-50'
+                        : beneficiaryConfirm.length === 4 && beneficiaryConfirm.toUpperCase() === getAddressLast4(formData.beneficiary)
+                        ? 'border-emerald-500 focus:ring-emerald-500 bg-emerald-50/30'
+                        : 'border-warm-200 focus:ring-sage-600 focus:border-sage-600'
+                    }`}
+                  />
+                  {confirmError && (
+                    <p className="text-sm text-rose-600 flex items-center gap-1.5 mt-2">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {confirmError}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -414,7 +484,12 @@ export default function CreateVaultPage() {
               </button>
               <button
                 onClick={handleConfirm}
-                className="flex-1 px-6 py-4 bg-sage-600 hover:bg-sage-700 text-white rounded-lg font-semibold transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-sm hover:shadow-md"
+                disabled={beneficiaryConfirm.length !== 4 || beneficiaryConfirm.toUpperCase() !== getAddressLast4(formData.beneficiary)}
+                className={`flex-1 px-6 py-4 rounded-lg font-semibold transition-all duration-200 transform shadow-sm ${
+                  beneficiaryConfirm.length === 4 && beneficiaryConfirm.toUpperCase() === getAddressLast4(formData.beneficiary)
+                    ? 'bg-sage-600 hover:bg-sage-700 text-white hover:scale-[1.02] active:scale-[0.98] hover:shadow-md'
+                    : 'bg-warm-200 text-warm-400 cursor-not-allowed'
+                }`}
               >
                 Confirm & Lock
               </button>

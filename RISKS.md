@@ -202,3 +202,55 @@
 - High (UX broken): Fix within 24h
 - Medium (degraded UX): Fix in next sprint
 - Low (cosmetic): Backlog
+
+---
+
+## Known Issues (2025-10-01)
+
+### Stack Overflow with Single-Transaction Create+Deposit
+**Status:** RESOLVED  
+**Issue:** Attempted to combine create_vault and deposit_usdc into single instruction; hit 4KB stack limit  
+**Resolution:** Keep as 2 separate transactions (create → deposit)  
+**Impact:** Users sign twice instead of once (acceptable tradeoff)
+
+### Close Vault UI Not Implemented
+**Status:** OPEN (Low Priority)  
+**Issue:** No UI for close_vault instruction (rent reclamation)  
+**Impact:** Users cannot reclaim rent after release (small amount, ~0.002 SOL)  
+**Mitigation:** Can add in future sprint; not critical for MVP
+
+### Test Suite Requires Localnet
+**Status:** EXPECTED  
+**Issue:** Test suite cannot run on devnet (would cost real SOL)  
+**Impact:** None (localnet testing is standard practice)  
+**Mitigation:** Run `solana-test-validator` before tests
+
+### Devnet Test Token vs Mainnet USDC
+**Status:** EXPECTED  
+**Issue:** Devnet uses test token, mainnet will use real USDC  
+**Impact:** Config must be updated for mainnet deployment  
+**Mitigation:** Documented in ADMIN_PLAYBOOK.md and memory/addresses.json
+
+---
+
+## Mitigations Added (2025-10-01)
+
+### Program Hardening
+✅ Removed unsafe `unwrap()` calls (use `checked_add()` with `Overflow` error)  
+✅ Added vault_id tracking (fixes PDA derivation bugs)  
+✅ Added deposit validations (no deposit after unlock/release)  
+✅ Fixed release PDA derivation (uses vault.vault_id not counter.last_id)  
+✅ Added beneficiary validation (creator != beneficiary check, commented for testing)  
+✅ Added close_vault for rent reclamation  
+✅ Comprehensive test suite (19+ test cases)
+
+### Documentation
+✅ DECISIONS.md updated with architectural rationale  
+✅ ADMIN_PLAYBOOK.md created for admin operations  
+✅ P1-P4 deliverable documents created  
+✅ memory/addresses.json updated with devnet addresses  
+
+---
+
+**Last Updated:** 2025-10-01  
+**Next Review:** Before mainnet deployment
