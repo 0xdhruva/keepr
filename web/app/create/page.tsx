@@ -6,11 +6,11 @@ import { useEffect, useState } from 'react';
 import { AmountInput } from '../_components/AmountInput';
 import { AddressInput } from '../_components/AddressInput';
 import { DateTimeInput } from '../_components/DateTimeInput';
-import { validateVaultForm, VaultFormData } from '../_lib/validation';
+import { validateVaultForm, VaultFormData, isAdminWallet } from '../_lib/validation';
 import { formatDateTime } from '../_lib/format';
 import { Identicon } from '../_components/Identicon';
 import { chunkAddress, getAddressLast4 } from '../_lib/identicon';
-import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { PublicKey, Transaction } from '@solana/web3.js';
 import { saveVaultMeta, addActivityLog, updateLastSeen } from '../_lib/storage';
 import { connection, PROGRAM_ID, USDC_MINT } from '../_lib/solana';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
@@ -28,12 +28,19 @@ export default function CreateVaultPage() {
     amount: '',
     beneficiary: '',
     unlockTime: '',
+    notificationWindowSeconds: 0, // Auto-calculated based on unlock time
+    gracePeriodSeconds: 0,         // Auto-calculated based on unlock time
+    creatorAddress: publicKey?.toBase58(),
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [txSignature, setTxSignature] = useState<string>('');
   const [vaultPda, setVaultPda] = useState<string>('');
   const [beneficiaryConfirm, setBeneficiaryConfirm] = useState<string>('');
   const [confirmError, setConfirmError] = useState<string>('');
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+
+  // Check if user is admin tester
+  const isAdmin = publicKey ? isAdminWallet(publicKey.toBase58()) : false;
 
   useEffect(() => {
     if (!connected) {
@@ -44,6 +51,8 @@ export default function CreateVaultPage() {
   useEffect(() => {
     if (connected && publicKey) {
       updateLastSeen(publicKey.toBase58());
+      // Update creatorAddress in formData
+      setFormData(prev => ({ ...prev, creatorAddress: publicKey.toBase58() }));
     }
   }, [connected, publicKey]);
 
@@ -51,8 +60,60 @@ export default function CreateVaultPage() {
     return null;
   }
 
+  const calculateDefaults = (unlockTime: string) => {
+    if (!unlockTime) return { notificationWindowSeconds: 0, gracePeriodSeconds: 0 };
+
+    const unlockUnix = Math.floor(new Date(unlockTime).getTime() / 1000);
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const vaultPeriodSeconds = unlockUnix - nowUnix;
+
+    if (vaultPeriodSeconds <= 0) return { notificationWindowSeconds: 0, gracePeriodSeconds: 0 };
+
+    // CRITICAL: On-chain validation uses clock.unix_timestamp (at execution time),
+    // not client's calculation time. Combined with STRICT inequality (<, not <=),
+    // we must ensure notification_window < on_chain_vault_period even after worst-case delays.
+    //
+    // Worst-case delay breakdown:
+    // - Wallet approval time: 5-30 seconds
+    // - Transaction propagation on devnet: 5-30 seconds
+    // - On-chain execution delay: 1-10 seconds
+    // - Clock skew between client and blockchain: 0-30 seconds
+    // - Strict inequality buffer (must be strictly less, not equal): 10 seconds
+    // Total: conservatively use 130-second buffer for short test vaults
+    const maxDelaySeconds = 120; // Worst-case transaction delay
+    const strictInequalityBuffer = 10; // Extra buffer to ensure strict < passes
+    const totalSafetyBuffer = maxDelaySeconds + strictInequalityBuffer;
+
+    const safeVaultPeriod = Math.max(0, vaultPeriodSeconds - totalSafetyBuffer);
+
+    // Use 20% to be even more conservative (was 25%)
+    const notificationWindowSeconds = Math.min(
+      7 * 24 * 60 * 60,
+      Math.max(1, Math.floor(safeVaultPeriod * 0.20))
+    );
+
+    const gracePeriodSeconds = Math.min(
+      7 * 24 * 60 * 60,
+      Math.max(1, Math.floor(safeVaultPeriod * 0.10))
+    );
+
+    return { notificationWindowSeconds, gracePeriodSeconds };
+  };
+
   const handleInputChange = (field: keyof VaultFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+
+    // Auto-calculate notification window and grace period when unlock time changes
+    if (field === 'unlockTime' && !showAdvanced) {
+      const defaults = calculateDefaults(value);
+      setFormData(prev => ({
+        ...prev,
+        unlockTime: value,
+        notificationWindowSeconds: defaults.notificationWindowSeconds,
+        gracePeriodSeconds: defaults.gracePeriodSeconds,
+      }));
+    }
+
     // Clear error for this field
     if (errors[field]) {
       setErrors(prev => {
@@ -65,7 +126,7 @@ export default function CreateVaultPage() {
 
   const handleContinueToReview = () => {
     const validationErrors = validateVaultForm(formData);
-    
+
     if (validationErrors.length > 0) {
       const errorMap: Record<string, string> = {};
       validationErrors.forEach(err => {
@@ -99,12 +160,43 @@ export default function CreateVaultPage() {
         throw new Error('Wallet not connected');
       }
 
+      // Use explicit program ID (no Anchor Program inference)
       const programId = new PublicKey(PROGRAM_ID);
-      console.log('Program ID:', programId.toBase58());
-      console.log('Wallet publicKey:', publicKey.toBase58());
 
       // Parse unlock time to Unix timestamp
       const unlockUnix = Math.floor(new Date(formData.unlockTime).getTime() / 1000);
+      const nowUnix = Math.floor(Date.now() / 1000);
+      const actualVaultPeriod = unlockUnix - nowUnix;
+
+      // CRITICAL: Recalculate notification window and grace period RIGHT NOW
+      // Don't use formData values as they may have been calculated minutes ago during form submission
+      // This ensures the values are based on the CURRENT time, not stale values
+      let notificationWindowSeconds: number;
+      let gracePeriodSeconds: number;
+
+      if (showAdvanced && formData.notificationWindowSeconds && formData.gracePeriodSeconds) {
+        // User customized values - use them as-is
+        notificationWindowSeconds = formData.notificationWindowSeconds;
+        gracePeriodSeconds = formData.gracePeriodSeconds;
+      } else {
+        // Auto-calculate based on CURRENT vault period
+        const defaults = calculateDefaults(formData.unlockTime);
+        notificationWindowSeconds = defaults.notificationWindowSeconds;
+        gracePeriodSeconds = defaults.gracePeriodSeconds;
+      }
+
+      console.log('=== VAULT CREATION DEBUG ===');
+      console.log('Unlock Unix:', unlockUnix);
+      console.log('Now Unix:', nowUnix);
+      console.log('Actual vault period:', actualVaultPeriod, 'seconds');
+      console.log('Notification window:', notificationWindowSeconds, 'seconds');
+      console.log('Grace period:', gracePeriodSeconds, 'seconds');
+      console.log('Validation check: notificationWindow < vaultPeriod?', notificationWindowSeconds, '<', actualVaultPeriod, '=', notificationWindowSeconds < actualVaultPeriod);
+      console.log('🔍 Additional checks:');
+      console.log('  - notification_window > 0?', notificationWindowSeconds > 0);
+      console.log('  - grace_period > 0?', gracePeriodSeconds > 0);
+      console.log('  - notification_window + grace_period =', notificationWindowSeconds + gracePeriodSeconds, 'seconds');
+      console.log('  - Combined vs vault period:', (notificationWindowSeconds + gracePeriodSeconds), '<', actualVaultPeriod, '?', (notificationWindowSeconds + gracePeriodSeconds) < actualVaultPeriod);
 
       // Parse amount to lamports (USDC has 6 decimals)
       const amountLamports = Math.floor(parseFloat(formData.amount) * 1_000_000);
@@ -127,27 +219,33 @@ export default function CreateVaultPage() {
         programId
       );
 
-      // Fetch counter to get next vault ID (or assume 0 if doesn't exist)
-      let nextVaultId = 1;
+      // Fetch counter to get next vault ID
+      // IMPORTANT: Program uses (counter.last_id + 1) in seeds, so we must match that
+      let nextVaultId = 1; // Default for first vault (counter doesn't exist yet)
       try {
         const counterAccount = await connection.getAccountInfo(counterPda);
         if (counterAccount) {
           // Counter exists, read last_id (u64 at offset 8)
           const data = counterAccount.data;
           const lastId = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
-          nextVaultId = lastId + 1;
+          nextVaultId = lastId + 1; // Program uses last_id + 1 in seeds
         }
       } catch (e) {
-        // Counter doesn't exist yet, will be created with ID 0, so next is 1
+        // Counter doesn't exist yet, will be created with last_id=0, program uses 0+1=1
         nextVaultId = 1;
       }
 
       // Derive vault PDA using counter
+      // IMPORTANT: vault_id is u64 (8 bytes) in seeds constraint
+      const vaultIdBuffer = new Uint8Array(8);
+      const vaultIdView = new DataView(vaultIdBuffer.buffer);
+      vaultIdView.setBigUint64(0, BigInt(nextVaultId), true); // true = little-endian
+
       const [vaultPda] = PublicKey.findProgramAddressSync(
         [
           Buffer.from('vault'),
           publicKey.toBuffer(),
-          Buffer.from(new Uint8Array(new BigUint64Array([BigInt(nextVaultId)]).buffer).slice(0, 8)),
+          vaultIdBuffer,
         ],
         programId
       );
@@ -162,14 +260,21 @@ export default function CreateVaultPage() {
         ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
-      // Get creator's token account
-      const creatorTokenAccount = await getAssociatedTokenAddress(
+      // Get creator's USDC token account
+      const creatorUsdcAta = await getAssociatedTokenAddress(
         new PublicKey(USDC_MINT),
         publicKey
       );
 
-      // Build create vault instruction
-      const createInstruction = await createVaultInstruction({
+      console.log('Building create vault instruction...');
+      console.log('Program ID:', programId.toString());
+      console.log('Vault PDA:', vaultPda.toString());
+      console.log('Beneficiary:', formData.beneficiary);
+      console.log('Unlock Unix:', unlockUnix);
+      console.log('Amount lamports:', amountLamports);
+
+      // Build createVault instruction using manual instruction builder
+      const createIx = await createVaultInstruction({
         config: configPda,
         counter: counterPda,
         vault: vaultPda,
@@ -179,69 +284,57 @@ export default function CreateVaultPage() {
         beneficiary: new PublicKey(formData.beneficiary),
         unlockUnix,
         nameHash,
+        notificationWindowSeconds,
+        gracePeriodSeconds,
         programId,
       });
 
-      // Build deposit instruction
-      const depositInstruction = await depositUsdcInstruction({
+      console.log('Building deposit USDC instruction...');
+
+      // Build depositUsdc instruction using manual instruction builder
+      const depositIx = await depositUsdcInstruction({
         config: configPda,
         vault: vaultPda,
         counter: counterPda,
         vaultTokenAccount,
         usdcMint: new PublicKey(USDC_MINT),
-        creatorUsdcAta: creatorTokenAccount,
+        creatorUsdcAta,
         creator: publicKey,
         amount: amountLamports,
         programId,
       });
 
-      // Create transaction with both instructions
-      const transaction = new Transaction().add(createInstruction, depositInstruction);
+      console.log('Combining instructions into single transaction...');
 
-      // Simulate transaction first to get better error messages
+      // Combine into single atomic transaction
+      // Both instructions use the same explicit programId - no inference confusion
+      const transaction = new Transaction().add(createIx).add(depositIx);
+
+      // Set transaction metadata (required by wallet)
+      console.log('Setting transaction metadata...');
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+
+      // Simulate first to get better error messages
       console.log('Simulating transaction...');
-      console.log('Transaction instructions:', transaction.instructions.length);
-      console.log('Create instruction data length:', createInstruction.data.length);
-      console.log('Deposit instruction data length:', depositInstruction.data.length);
+      const simulation = await connection.simulateTransaction(transaction);
+      console.log('Simulation result:', simulation);
 
-      try {
-        // Set recent blockhash and fee payer for simulation
-        const { blockhash } = await connection.getLatestBlockhash();
-        transaction.recentBlockhash = blockhash;
-        transaction.feePayer = publicKey;
-
-        const simulation = await connection.simulateTransaction(transaction);
-        console.log('Simulation result:', simulation);
-
-        if (simulation.value.err) {
-          console.error('Simulation failed:', simulation.value.err);
-          console.error('Simulation logs:', simulation.value.logs);
-          throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}\nLogs: ${simulation.value.logs?.join('\n')}`);
-        }
-      } catch (simError) {
-        console.error('Simulation error:', simError);
-        throw simError;
+      if (simulation.value.err) {
+        console.error('Simulation failed:', simulation.value.err);
+        console.error('Simulation logs:', simulation.value.logs);
+        throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}\nLogs: ${simulation.value.logs?.join('\n')}`);
       }
 
-      // Send and confirm transaction
       console.log('Sending transaction...');
-      let signature: string;
-      try {
-        signature = await sendTransaction(transaction, connection);
-        console.log('Transaction sent:', signature);
+      const signature = await sendTransaction(transaction, connection);
+      console.log('Transaction sent:', signature);
 
-        // Wait for confirmation
-        const confirmation = await connection.confirmTransaction(signature, 'confirmed');
-        console.log('Transaction confirmed!', confirmation);
-      } catch (sendError: any) {
-        console.error('Send transaction error:', sendError);
-        console.error('Error details:', {
-          message: sendError.message,
-          logs: sendError.logs,
-          err: sendError.err,
-        });
-        throw sendError;
-      }
+      // Wait for confirmation
+      console.log('Waiting for confirmation...');
+      await connection.confirmTransaction(signature, 'confirmed');
+      console.log('Transaction confirmed!');
 
       setVaultPda(vaultPda.toBase58());
       setTxSignature(signature);
@@ -252,7 +345,7 @@ export default function CreateVaultPage() {
         name: formData.name,
         createdAt: Date.now(),
         lastRefreshed: Date.now(),
-        unlockUnix,
+        unlockUnix: unlockUnix,
         amountLocked: parseFloat(formData.amount) * 1_000_000,
         beneficiary: formData.beneficiary,
         creator: publicKey.toBase58(),
@@ -285,6 +378,8 @@ export default function CreateVaultPage() {
       amount: '',
       beneficiary: '',
       unlockTime: '',
+      notificationWindowSeconds: 7 * 24 * 60 * 60, // 7 days
+      gracePeriodSeconds: 7 * 24 * 60 * 60,         // 7 days
     });
     setErrors({});
     setTxSignature('');
@@ -299,9 +394,17 @@ export default function CreateVaultPage() {
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2 text-warm-900">Create Vault</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold text-warm-900">Create Vault</h1>
+            {isAdmin && (
+              <span className="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-semibold rounded-full border border-purple-200">
+                ADMIN TESTER
+              </span>
+            )}
+          </div>
           <p className="text-warm-600">
             Lock USDC for your beneficiary with a time-locked release
+            {isAdmin && ' • Testing mode: 2min minimum, self-beneficiary allowed'}
           </p>
         </div>
 
@@ -360,6 +463,80 @@ export default function CreateVaultPage() {
                 onChange={(val) => handleInputChange('beneficiary', val)}
                 error={errors.beneficiary}
               />
+            </div>
+
+            {/* Advanced Settings */}
+            <div className="border border-warm-200 rounded-xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="w-full px-6 py-4 bg-warm-50 hover:bg-warm-100 flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <svg className="w-5 h-5 text-warm-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span className="font-medium text-warm-700">Advanced Settings (Optional)</span>
+                </div>
+                <svg
+                  className={`w-5 h-5 text-warm-600 transition-transform ${showAdvanced ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  strokeWidth="2"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {showAdvanced && (
+                <div className="p-6 bg-white space-y-6 border-t border-warm-200">
+                  <p className="text-sm text-warm-600 -mt-2">
+                    Configure check-in periods. Leave blank to use recommended defaults based on vault duration.
+                  </p>
+
+                  {/* Notification Window */}
+                  <div className="space-y-2">
+                    <label htmlFor="notificationWindow" className="block text-sm font-medium text-warm-700">
+                      Check-In Period (seconds)
+                    </label>
+                    <input
+                      id="notificationWindow"
+                      type="number"
+                      min="1"
+                      value={formData.notificationWindowSeconds || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, notificationWindowSeconds: parseInt(e.target.value) || 0 }))}
+                      placeholder={formData.unlockTime ? calculateDefaults(formData.unlockTime).notificationWindowSeconds.toString() : ''}
+                      className="w-full px-4 py-3 bg-white border border-warm-200 rounded-lg text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-sage-600 focus:border-sage-600 transition-all duration-200"
+                    />
+                    <p className="text-xs text-warm-500">
+                      How often you need to check in. If you don't check in for this duration, the vault can be released early.
+                      {formData.unlockTime && ` (Recommended: ${Math.floor(calculateDefaults(formData.unlockTime).notificationWindowSeconds / 60)} minutes)`}
+                    </p>
+                  </div>
+
+                  {/* Grace Period */}
+                  <div className="space-y-2">
+                    <label htmlFor="gracePeriod" className="block text-sm font-medium text-warm-700">
+                      Grace Period (seconds)
+                    </label>
+                    <input
+                      id="gracePeriod"
+                      type="number"
+                      min="1"
+                      value={formData.gracePeriodSeconds || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, gracePeriodSeconds: parseInt(e.target.value) || 0 }))}
+                      placeholder={formData.unlockTime ? calculateDefaults(formData.unlockTime).gracePeriodSeconds.toString() : ''}
+                      className="w-full px-4 py-3 bg-white border border-warm-200 rounded-lg text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-sage-600 focus:border-sage-600 transition-all duration-200"
+                    />
+                    <p className="text-xs text-warm-500">
+                      Extra time given after a missed check-in before the vault can be released.
+                      {formData.unlockTime && ` (Recommended: ${Math.floor(calculateDefaults(formData.unlockTime).gracePeriodSeconds / 60)} minutes)`}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Continue Button */}

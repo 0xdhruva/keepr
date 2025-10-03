@@ -265,11 +265,6 @@
         },
         {
           "name": "beneficiary",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "payer",
           "writable": true,
           "signer": true
         },
@@ -362,100 +357,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "cancelVault",
-      "discriminator": [
-        150,
-        95,
-        141,
-        252,
-        158,
-        53,
-        60,
-        102
-      ],
-      "accounts": [
-        {
-          "name": "vault",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "counter",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "vaultTokenAccount",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "usdcMint",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "creatorUsdcAta",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "creator",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "associatedTokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "systemProgram",
-          "writable": false,
-          "signer": false
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "updateAdminTestWallets",
-      "discriminator": [
-        78,
-        232,
-        151,
-        77,
-        196,
-        236,
-        111,
-        169
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "admin",
-          "writable": false,
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "wallets",
-          "type": {
-            "vec": "pubkey"
-          }
-        }
-      ]
     }
   ],
   "accounts": [
@@ -520,12 +421,6 @@
           {
             "name": "paused",
             "type": "bool"
-          },
-          {
-            "name": "adminTestWallets",
-            "type": {
-              "vec": "pubkey"
-            }
           }
         ]
       }
@@ -573,14 +468,6 @@
           },
           {
             "name": "released",
-            "type": "bool"
-          },
-          {
-            "name": "cancelled",
-            "type": "bool"
-          },
-          {
-            "name": "isTestVault",
             "type": "bool"
           },
           {
@@ -934,21 +821,6 @@
       "code": 6015,
       "name": "CounterNotInitialized",
       "msg": "Counter not properly initialized."
-    },
-    {
-      "code": 6016,
-      "name": "VaultAlreadyCancelled",
-      "msg": "Vault has already been cancelled."
-    },
-    {
-      "code": 6017,
-      "name": "CannotCancelAfterRelease",
-      "msg": "Cannot cancel vault after it has been released."
-    },
-    {
-      "code": 6018,
-      "name": "AdminTestWalletsLimitExceeded",
-      "msg": "Admin test wallets list cannot exceed 10 wallets."
     }
   ]
 }

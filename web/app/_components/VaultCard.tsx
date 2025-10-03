@@ -12,6 +12,7 @@ interface VaultCardProps {
   beneficiary: string;
   creator: string;
   released: boolean;
+  cancelled?: boolean;
   isCreator: boolean;
 }
 
@@ -23,18 +24,20 @@ export function VaultCard({
   beneficiary,
   creator,
   released,
+  cancelled,
   isCreator,
 }: VaultCardProps) {
   const now = Math.floor(Date.now() / 1000);
   const isUnlocked = now >= unlockUnix;
-  
-  const status = released ? 'released' : isUnlocked ? 'unlocked' : 'locked';
-  
+
+  const status = cancelled ? 'cancelled' : released ? 'released' : isUnlocked ? 'unlocked' : 'locked';
+
   // Pastel backgrounds based on status
   const bgColors = {
     locked: 'from-lavender-100 to-lavender-200 border-lavender-300/50',
     unlocked: 'from-mint-100 to-mint-200 border-mint-300/50',
     released: 'from-rose-100 to-rose-200 border-rose-300/50',
+    cancelled: 'from-warm-100 to-warm-200 border-warm-300/50',
   };
 
   return (
@@ -62,6 +65,11 @@ export function VaultCard({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             )}
+            {status === 'cancelled' && (
+              <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            )}
           </div>
         </div>
 
@@ -84,20 +92,20 @@ export function VaultCard({
         </div>
 
         {/* Action Button */}
-        {isUnlocked && !released && (
-          <button className="w-full px-4 py-2.5 bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium rounded-xl transition-colors">
-            Release Funds
-          </button>
+        {status === 'cancelled' && (
+          <div className="text-center py-2 text-xs text-warm-600 font-medium">
+            Cancelled
+          </div>
         )}
-        {status === 'locked' && (
-          <button className="w-full px-4 py-2.5 bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium rounded-xl transition-colors">
-            View Details
-          </button>
-        )}
-        {released && (
+        {status === 'released' && (
           <div className="text-center py-2 text-xs text-gray-600 font-medium">
             Released
           </div>
+        )}
+        {(status === 'locked' || status === 'unlocked') && !cancelled && (
+          <button className="w-full px-4 py-2.5 bg-sage-600 hover:bg-sage-700 text-white text-sm font-medium rounded-xl transition-colors shadow-sm">
+            {isUnlocked && !isCreator ? 'Release Funds' : 'View Details'}
+          </button>
         )}
       </div>
     </Link>

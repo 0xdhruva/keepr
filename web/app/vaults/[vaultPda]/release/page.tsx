@@ -140,7 +140,8 @@ export default function ReleasePage() {
         vaultTokenAccount,
         usdcMint: new PublicKey(USDC_MINT),
         beneficiaryUsdcAta,
-        beneficiary: publicKey,  // Current user must be the beneficiary
+        beneficiary: beneficiaryKey,  // Actual beneficiary from vault
+        payer: publicKey,  // Pays for beneficiary ATA creation if needed (connected wallet signs)
         programId,
       });
 

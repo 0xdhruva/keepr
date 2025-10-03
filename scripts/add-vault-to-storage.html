@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Add Vault to LocalStorage</title>
+</head>
+<body>
+  <h1>Add Vault to LocalStorage</h1>
+  <p>Open browser console and run this:</p>
+
+  <pre id="code">
+// Get existing cache
+const existingCache = JSON.parse(localStorage.getItem('keepr.vaultCache') || '[]');
+
+// Add your vault
+const newVault = {
+  vaultPda: 'taNc232vrnmq5NEarKz1imNBuGTXoCZMw1ZMeSXasbX',
+  name: 'Test Vault', // Update this with your vault name
+  createdAt: Date.now(),
+  lastRefreshed: Date.now(),
+  unlockUnix: 1727939400, // Update with your unlock time (Oct 3, 12:50 PM IST = 1727939400)
+  amountLocked: 1000000, // 1 USDC in lamports
+  beneficiary: '9ssrJyXicq9m6FpVeeZuwLbwp3qXoNTgv8u4n31GZphQ', // Update with your beneficiary
+  creator: '9ssrJyXicq9m6FpVeeZuwLbwp3qXoNTgv8u4n31GZphQ', // Your wallet
+  released: false
+};
+
+// Add to cache
+existingCache.push(newVault);
+
+// Save back
+localStorage.setItem('keepr.vaultCache', JSON.stringify(existingCache));
+
+console.log('Vault added to localStorage!');
+console.log('Refresh the page to see it in My Vaults');
+  </pre>
+
+  <button onclick="copyCode()">Copy Code</button>
+
+  <script>
+    function copyCode() {
+      const code = document.getElementById('code').textContent;
+      navigator.clipboard.writeText(code);
+      alert('Code copied! Paste in browser console on localhost:3000');
+    }
+  </script>
+</body>
+</html>
