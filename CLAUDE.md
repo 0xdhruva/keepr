@@ -132,8 +132,8 @@ npm run lint
 - `web/app/page.tsx` — Landing page
 - `web/app/create/page.tsx` — Vault creation flow
 - `web/app/vaults/page.tsx` — Vault list (creator's vaults)
-- `web/app/vaults/[vaultPda]/page.tsx` — Vault details
-- `web/app/vaults/[vaultPda]/release/page.tsx` — Release flow
+- `web/app/vaults/[vaultPda]/page.tsx` — Vault details with release and close actions
+- `web/app/vaults/[vaultPda]/release/page.tsx` — ⚠️ DEPRECATED: Release flow (functionality moved to main vault page)
 
 ### Local Storage Schema
 
@@ -148,6 +148,27 @@ When program changes:
 1. `cd programs/keepr-vault && anchor build`
 2. Copy `target/idl/keepr_vault.json` to `web/app/_lib/keepr_vault.json`
 3. Restart Next.js dev server
+
+### User Flow (Current Implementation)
+
+**Vault Creation:**
+1. User fills form: name, beneficiary address, unlock date/time
+2. Advanced settings (optional): notification window, grace period
+3. Review screen shows calculated parameters with safety buffer
+4. Two transactions: `create_vault` → `deposit_usdc`
+
+**Vault Management (on details page):**
+- **Before unlock:** Shows countdown timer, vault details
+- **After unlock (not released):** Shows "Release Funds" button
+  - Anyone can trigger release (connected wallet pays for beneficiary ATA if needed)
+  - Entire balance transferred to beneficiary
+  - Vault marked as `released=true`
+- **After release:** Shows "Close Vault" button (creator only)
+  - Closes vault account and token account
+  - Reclaims rent to creator
+  - Redirects to vault list
+
+**Note:** Release and close are now on the same page (`/vaults/[vaultPda]`), not separate routes.
 
 ## Important Design Decisions
 
@@ -185,9 +206,57 @@ Phantom mobile browser provides seamless in-app wallet integration (responsive d
 - **Validation:** Client-side mirrors on-chain checks to reduce failed transactions
 - **Error handling:** User-friendly messages to save transaction fees
 
+## Critical Debugging Learnings
+
+### Borsh Serialization Gotchas
+
+**IMPORTANT:** When manually building instructions in `web/app/_lib/instructions.ts`:
+
+1. **Fixed-size arrays `[u8; N]`** serialize WITHOUT length prefix (just N bytes)
+   - Use `encodeFixedBytes()` for fields like `name_hash: [u8; 32]`
+   - Example: 32-byte hash → 32 bytes in instruction data
+
+2. **Dynamic vectors `Vec<u8>`** serialize WITH 4-byte length prefix + data
+   - Use `encodeVecU8()` for dynamic-length fields
+   - Example: Vec of 32 bytes → 36 bytes total (4 + 32)
+
+3. **Common bug:** Using `Vec<u8>` encoding for fixed-size array causes 4-byte misalignment
+   - Symptoms: Validation errors on fields that appear correct client-side
+   - Root cause: Program reads garbage data due to offset mismatch
+
+### Release Instruction Requirements
+
+The `release` instruction requires a `payer` account even though release is permissionless:
+
+- **Why:** Beneficiary ATA may not exist yet; `init_if_needed` constraint requires payer for rent
+- **Who signs:** Any connected wallet (creator, beneficiary, or third party)
+- **Fixed in:** `/web/app/_lib/instructions.ts` and vault details page
+
+### Notification Window Validation
+
+On-chain validation uses **strict inequality** (`<` not `<=`):
+```rust
+require!(notification_window_seconds < vault_period_seconds, ...)
+```
+
+**Client-side calculation must account for:**
+- Wallet approval delay: 5-30 seconds
+- Network propagation: 5-30 seconds (devnet slower than mainnet)
+- On-chain execution delay: 1-10 seconds
+- Clock skew: 0-30 seconds
+- **Total safety buffer:** 90-130 seconds for short test vaults
+
+## Known Limitations & Future Work
+
+- **Manual release required:** User must click "Release Funds" button after unlock
+  - Future: Implement automatic release via Clockwork, keeper bots, or incentivized release
+- **No partial releases:** All-or-nothing fund transfer
+- **No vault editing:** Cannot change beneficiary or unlock time after creation
+
 ## Reference Documentation
 
 - **DECISIONS.md** — Chronological log of all architecture decisions with rationale
 - **P1_PROGRAM_STRUCTURE.md** — Detailed program implementation summary (instructions, PDAs, events, errors)
+- **SOLANA_PROGRAM_ISSUES_AND_LEARNINGS.md** — Comprehensive debugging log (serialization bugs, instruction errors, fixes)
 - **README.md** — Basic project description
 - **Anchor.toml** — Anchor version 0.30.1, devnet cluster config, test scripts

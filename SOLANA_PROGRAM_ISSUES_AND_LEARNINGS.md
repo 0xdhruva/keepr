@@ -1326,3 +1326,358 @@ This requires architectural change - possible approaches:
 
 **Decision pending**: Automatic release mechanism design and implementation.
 
+---
+
+## Issue #8: Missing amount_locked Reset in Release Function
+
+**Date**: Oct 6, 2025
+**Error**: `AlreadyReleased` (Error 6002) but vault still shows funds
+**Severity**: 🔴 **CRITICAL** - Data integrity bug
+**Status**: ✅ **RESOLVED**
+
+### Problem
+
+User reported vault showing "ready to release" on list page but "already released" on details page, with funds not actually returned.
+
+**Symptoms:**
+- Release transaction fails with `AlreadyReleased` error at lib.rs:302
+- Vault has `released = true` flag set
+- Vault shows `amount_locked > 0` in vault account
+- Token account balance is **actually 0** (funds were transferred)
+- UI shows inconsistent state
+
+### Root Cause
+
+**Critical bug in `release()` function (lib.rs:291-341):**
+
+The function transfers funds and sets the `released` flag, but **never zeros `amount_locked`**:
+
+```rust
+// lib.rs:309-332 (before fix)
+let amount = vault.amount_locked;  // Read amount
+// ... lines 314-330: token transfer succeeds
+vault.released = true;  // Set flag
+// ❌ MISSING: vault.amount_locked = 0;
+```
+
+**Compare to `cancel_vault()` (lines 373-378) which correctly does:**
+```rust
+token::transfer(cpi_ctx, amount)?;  // Transfer
+vault.cancelled = true;             // Set flag
+vault.amount_locked = 0;            // ✅ Zero the amount
+```
+
+### Investigation Details
+
+**Vault address:** `3AockQKLQBRvY2qrvhSFLTWWj8imTAQvMNHFurLsQ1hQ`
+
+**On-chain state (before fix):**
+```
+- amount_locked: 1,000,000 lamports (1 USDC)
+- released: true
+- cancelled: false
+- vault_token_account balance: 0 lamports ← Funds WERE transferred!
+```
+
+**What happened:**
+1. Someone successfully called `release()`
+2. Token transfer completed (balance went to 0)
+3. `released` flag was set to `true`
+4. Transaction completed successfully
+5. But `amount_locked` still showed 1 USDC
+6. Subsequent release attempts failed at line 302: `require!(!vault.released, ...)`
+7. UI showed confusing state due to mismatch between `amount_locked` and actual balance
+
+### Solution
+
+**1. Fixed the release function (lib.rs:332-333):**
+```rust
+vault.released = true;
+vault.amount_locked = 0;  // ✅ Added
+```
+
+**2. Added admin recovery function for stuck vaults:**
+```rust
+/// Fix stuck vault (admin only) - for vaults that are released but have incorrect amount_locked
+pub fn fix_released_vault(ctx: Context<FixReleasedVault>) -> Result<()> {
+    let vault = &mut ctx.accounts.vault;
+
+    require!(vault.released, KeeprError::NotReleased);
+    require!(ctx.accounts.vault_token_account.amount == 0, KeeprError::VaultNotEmpty);
+
+    vault.amount_locked = 0;  // Fix the stuck value
+    Ok(())
+}
+```
+
+**3. Created admin script:** `web/scripts/fix-stuck-vault.ts`
+
+### Deployment & Fix
+
+**Deployment 1 (fix for future vaults):**
+- Transaction: `2xfBB4nAueqFyFD3r9eaR6kHSsUSHPb7126W9Nw7mHWpDNnqXzwxz6uBNewroQ1Tg7SFhq3ppSGYfRDxCtnQe1Qs`
+- Added `vault.amount_locked = 0;` to release function
+
+**Deployment 2 (admin recovery function):**
+- Transaction: `58rBE34FPVTFxqoj7cLXL9WkexpjRKcr4MswBPpwor2dBaiHMri8sXGaku2cunsAPcuXJcRcJx434EUgWBReawqK`
+- Added `fix_released_vault` instruction
+
+**Fixed stuck vault:**
+- Transaction: `5xEA7DnFZbFRnVMSikUziqqqw6fHDezQ37mjhvHZzRr58Tt52TRp3J2bHVcujRdVoNJGY842Y6ZQUvy4Y2sFqwmW`
+- Vault `3AockQKLQBRvY2qrvhSFLTWWj8imTAQvMNHFurLsQ1hQ` now has `amount_locked = 0` ✓
+
+### Key Learnings
+
+1. **State consistency is critical**: All related fields must be updated atomically
+2. **Always check similar functions**: `cancel_vault` had the correct pattern
+3. **Verify with on-chain data**: Token account balance revealed funds were actually transferred
+4. **Admin recovery functions**: Essential for fixing production bugs without data loss
+5. **Pattern to follow**: When transferring funds from a vault:
+   ```rust
+   token::transfer(cpi_ctx, amount)?;  // Transfer
+   vault.released = true;               // Set status flag
+   vault.amount_locked = 0;            // Zero the amount ← Don't forget!
+   ```
+
+### Impact
+
+**Before fix:**
+- Any vault that was successfully released would get stuck
+- UI would show incorrect state
+- Vault couldn't be closed (requires `amount_locked == 0`)
+- User confusion ("where are my funds?")
+
+**After fix:**
+- All future releases will properly zero `amount_locked`
+- Admin can fix any stuck vaults from before the fix
+- UI now shows consistent state
+
+### Testing Checklist
+
+For any instruction that transfers funds:
+- [ ] Transfer executes successfully
+- [ ] Status flags are set correctly
+- [ ] Amount fields are zeroed
+- [ ] Token account balance matches on-chain fields
+- [ ] Subsequent operations work as expected
+- [ ] UI reflects accurate state
+
+---
+
+## Issue #9: Schema Migration Breaking Backward Compatibility
+
+**Date**: Oct 6, 2025
+**Error**: `AccountDidNotDeserialize` (Error 3003) for old vaults
+**Severity**: 🔴 **CRITICAL** - Data migration bug
+**Status**: ⚠️ **OPEN ISSUE** - Not fixed, only cleaned up
+
+### Problem
+
+When new fields were added to the `Vault` struct (specifically `notification_window_seconds`, `grace_period_seconds`, and `last_checkin_unix`), existing vaults created with the old schema became **permanently undeserializable**.
+
+**Symptoms:**
+- Old vaults show "AccountDidNotDeserialize" error when accessed
+- Cannot release funds from old vaults
+- Cannot close old vaults to reclaim rent
+- Funds are permanently locked in old schema vaults
+
+### Root Cause
+
+**Anchor's strict deserialization** requires the on-chain data layout to **exactly match** the current Rust struct definition:
+
+```rust
+// Old schema (before fix)
+#[account]
+pub struct Vault {
+    pub creator: Pubkey,              // 32 bytes
+    pub beneficiary: Pubkey,          // 32 bytes
+    pub usdc_mint: Pubkey,            // 32 bytes
+    pub vault_token_account: Pubkey,  // 32 bytes
+    pub amount_locked: u64,           // 8 bytes
+    pub unlock_unix: i64,             // 8 bytes
+    pub released: bool,               // 1 byte
+    pub cancelled: bool,              // 1 byte
+    pub is_test_vault: bool,          // 1 byte
+    pub bump: u8,                     // 1 byte
+    pub name_hash: [u8; 32],         // 32 bytes
+    pub vault_id: u64,               // 8 bytes
+    // Total: 188 bytes
+}
+
+// New schema (current)
+#[account]
+pub struct Vault {
+    // ... same fields as above ...
+    pub vault_id: u64,                      // 8 bytes
+    pub vault_period_seconds: u32,          // 4 bytes ← ADDED
+    pub notification_window_seconds: u32,   // 4 bytes ← ADDED
+    pub grace_period_seconds: u32,          // 4 bytes ← ADDED
+    pub last_checkin_unix: i64,            // 8 bytes ← ADDED
+    // Total: 216 bytes
+}
+```
+
+**When the program tries to deserialize old 188-byte vaults:**
+1. Anchor reads the discriminator (8 bytes) ✓
+2. Attempts to read struct fields sequentially
+3. Runs out of data when trying to read new fields
+4. Throws `AccountDidNotDeserialize` error
+5. Transaction fails immediately
+
+### Investigation Details
+
+**Affected vaults on devnet:**
+- `HSQbhLD5...` - 1 USDC locked, 188 bytes (old schema)
+- `HBz6KSho...` - 1 USDC locked, 188 bytes (old schema)
+- `8YYmKMWt...` - 1 USDC locked, 188 bytes (old schema)
+
+**Attempts to access these vaults result in:**
+```
+Program log: AnchorError caused by account: vault.
+Error Code: AccountDidNotDeserialize. Error Number: 3003.
+Error Message: Failed to deserialize the account.
+Program consumed 4042 compute units
+Program failed: custom program error: 0xbbb
+```
+
+**Why this happened:**
+1. Initial vaults created without notification/grace period fields
+2. Program was updated to add dead man's switch functionality
+3. New fields added to `Vault` struct
+4. Old vaults still exist on-chain with old layout
+5. Program redeployed with new schema
+6. **No migration path provided**
+
+### Current Status
+
+**Cleanup performed:**
+- Successfully released 1 vault with new schema (GjJaN9...) ✓
+- 3 vaults with old schema remain **permanently stuck**
+- Total locked: 3 USDC (considered lost on devnet)
+- User's actual balance: 10 USDC ✓
+
+**UI updated:**
+- Vaults page filters out undeserializable vaults
+- Only shows vaults with correct schema
+
+### The Real Issue
+
+This is **NOT actually a bug in the accounting** - the 3 USDC appears to be from test deposits during development. The vaults showing 3 USDC are genuinely stuck due to schema incompatibility.
+
+**This is a fundamental Solana/Anchor development issue:**
+- Schema changes break backward compatibility
+- No automatic migration
+- Funds can be permanently locked
+
+### Solutions (Not Implemented)
+
+**Option 1: Backward-Compatible Deserialization**
+```rust
+// Use Option<T> for new fields with default values
+pub vault_period_seconds: Option<u32>,
+pub notification_window_seconds: Option<u32>,
+pub grace_period_seconds: Option<u32>,
+pub last_checkin_unix: Option<i64>,
+```
+**Problem:** Requires custom deserialization logic
+
+**Option 2: Manual Data Migration**
+- Read old vaults with raw account data parsing
+- Create new vaults with migrated data
+- Transfer funds from old to new
+**Problem:** Complex, requires downtime
+
+**Option 3: Version Field**
+```rust
+pub schema_version: u8,
+// ... conditional logic based on version
+```
+**Problem:** Adds complexity to every instruction
+
+**Option 4: Raw Instruction Handler**
+- Bypass Anchor deserialization
+- Parse account data manually
+- Handle old and new schemas
+**Problem:** Defeats purpose of using Anchor
+
+### Recommended Solution (For Production)
+
+**Before making ANY schema changes to production:**
+
+1. **Add schema_version field** to all account structs
+2. **Implement migration instructions:**
+   ```rust
+   pub fn migrate_vault_v1_to_v2(ctx: Context<MigrateVault>) -> Result<()> {
+       // Read old schema manually
+       // Create new account with new schema
+       // Transfer funds and rent
+       Ok(())
+   }
+   ```
+3. **Use realloc for additive changes:**
+   ```rust
+   #[account(
+       mut,
+       realloc = 8 + Vault::INIT_SPACE,
+       realloc::payer = authority,
+       realloc::zero = true,
+   )]
+   ```
+4. **Always test migrations on devnet first**
+5. **Provide clear migration timeline to users**
+
+### Key Learnings
+
+1. **Schema changes are BREAKING changes** - treat them like major version bumps
+2. **Plan for migrations from day 1** - add version fields immediately
+3. **Never assume you can just redeploy** - existing accounts will break
+4. **Devnet testing is critical** - we caught this before mainnet
+5. **Document all schema versions** - keep history of every layout
+6. **Consider using dynamic fields** - `Vec<u8>` or `HashMap<String, String>` for extensibility
+
+### Impact
+
+**Devnet (current situation):**
+- 3 vaults permanently stuck (3 USDC lost)
+- No user impact (test funds only)
+- Valuable learning experience
+
+**If this happened on mainnet:**
+- 🔴 **CATASTROPHIC** - Real user funds permanently locked
+- No way to recover without custom migration
+- Potential legal liability
+- Complete loss of user trust
+
+### Prevention Checklist
+
+Before ANY struct field changes:
+- [ ] Add version field if not present
+- [ ] Write migration instruction
+- [ ] Test migration on devnet with real accounts
+- [ ] Document rollback procedure
+- [ ] Plan communication to users
+- [ ] Consider realloc vs new account
+- [ ] Verify all instructions work with new schema
+- [ ] Check account size limits (10KB max)
+
+### Status
+
+**⚠️ THIS BUG IS NOT FIXED**
+
+The 3 stuck vaults remain on devnet and cannot be accessed. This issue has only been "cleaned up" by:
+- Hiding undeserializable vaults in the UI
+- Documenting the problem
+- Ensuring the user's correct balance (10 USDC) is reflected
+
+**For production deployment:**
+- [ ] Implement schema versioning
+- [ ] Add migration instructions
+- [ ] Test backward compatibility
+- [ ] Never deploy breaking schema changes without migration path
+
+### References
+
+- Anchor Account Deserialization: https://book.anchor-lang.com/anchor_in_depth/the_accounts_struct.html
+- Solana Account Realloc: https://docs.solana.com/developing/programming-model/accounts#realloc
+- Error 3003 Documentation: https://github.com/coral-xyz/anchor/blob/master/lang/src/error.rs
+

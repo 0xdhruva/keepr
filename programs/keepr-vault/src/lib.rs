@@ -330,6 +330,7 @@ pub mod keepr_vault {
         token::transfer(cpi_ctx, amount)?;
 
         vault.released = true;
+        vault.amount_locked = 0;
 
         emit!(VaultReleased {
             vault: vault.key(),
@@ -382,6 +383,26 @@ pub mod keepr_vault {
             creator: vault.creator,
             amount_refunded: amount,
         });
+
+        Ok(())
+    }
+
+    /// Fix stuck vault (admin only) - for vaults that are released but have incorrect amount_locked
+    /// This is a recovery function for a bug where released vaults weren't zeroing amount_locked
+    pub fn fix_released_vault(ctx: Context<FixReleasedVault>) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+
+        // Safety checks
+        require!(vault.released, KeeprError::NotReleased);
+
+        // Verify token account is actually empty
+        require!(
+            ctx.accounts.vault_token_account.amount == 0,
+            KeeprError::VaultNotEmpty
+        );
+
+        // Fix the amount_locked field
+        vault.amount_locked = 0;
 
         Ok(())
     }
@@ -628,6 +649,27 @@ pub struct CancelVault<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FixReleasedVault<'info> {
+    #[account(seeds = [b"config"], bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", vault.creator.as_ref(), &vault.vault_id.to_le_bytes()],
+        bump = vault.bump
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        associated_token::mint = vault.usdc_mint,
+        associated_token::authority = vault
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]

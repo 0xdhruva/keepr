@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { VaultCard } from '../_components/VaultCard';
 import { getVaultCache, updateLastSeen } from '../_lib/storage';
 import Link from 'next/link';
+import { Connection, PublicKey } from '@solana/web3.js';
 
 interface Vault {
   vaultPda: string;
@@ -27,6 +28,7 @@ export default function VaultsPage() {
   const [createdVaults, setCreatedVaults] = useState<Vault[]>([]);
   const [beneficiaryVaults, setBeneficiaryVaults] = useState<Vault[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     if (!connected) {
@@ -50,9 +52,71 @@ export default function VaultsPage() {
     try {
       const userAddress = publicKey.toBase58();
       const cache = getVaultCache();
+      const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+      const programId = new PublicKey('74v7NZh7A6SH9DmKZRC4tFUwaLvq19KfD1NGni62XQJK');
 
-      // Filter vaults created by this user
-      const created = cache
+      // Scan blockchain for all vaults created by this user
+      console.log('Scanning blockchain for vaults created by', userAddress);
+      const accounts = await connection.getProgramAccounts(programId, {
+        filters: [
+          {
+            memcmp: {
+              offset: 8, // After discriminator
+              bytes: publicKey.toBase58(),
+            },
+          },
+        ],
+      });
+
+      console.log('Found', accounts.length, 'vaults on-chain');
+
+      // Process all on-chain vaults
+      const onChainVaults = accounts.map((account) => {
+        try {
+          const data = account.account.data;
+
+          // Filter out old schema vaults (188 bytes vs current 216 bytes)
+          // Old vaults are undeserializable and should be hidden
+          const CURRENT_VAULT_SIZE = 216; // 8 discriminator + 208 struct data
+          if (data.length !== CURRENT_VAULT_SIZE) {
+            console.log('Skipping vault with old schema:', account.pubkey.toBase58().slice(0, 8) + '... (size:', data.length, 'bytes, expected:', CURRENT_VAULT_SIZE, ')');
+            return null;
+          }
+
+          const creator = new PublicKey(data.slice(8, 40));
+          const beneficiary = new PublicKey(data.slice(40, 72));
+          const amountLockedBuf = data.slice(136, 144);
+          const unlockUnixBuf = data.slice(144, 152);
+          const released = data[152] === 1;
+          const cancelled = data[153] === 1;
+
+          const amountLocked = Number(new DataView(amountLockedBuf.buffer, amountLockedBuf.byteOffset, 8).getBigUint64(0, true));
+          const unlockUnix = Number(new DataView(unlockUnixBuf.buffer, unlockUnixBuf.byteOffset, 8).getBigInt64(0, true));
+
+          // Find cached metadata or use defaults
+          const cachedMeta = cache.find((m) => m.vaultPda === account.pubkey.toBase58());
+
+          return {
+            vaultPda: account.pubkey.toBase58(),
+            name: cachedMeta?.name || 'Unnamed Vault',
+            creator: creator.toBase58(),
+            beneficiary: beneficiary.toBase58(),
+            amountLocked,
+            unlockUnix,
+            released,
+            cancelled,
+          };
+        } catch (error) {
+          console.error('Error parsing vault', account.pubkey.toBase58(), error);
+          return null;
+        }
+      }).filter((v) => v !== null);
+
+      // Use on-chain scanned vaults as the source of truth
+      // Filter out null entries and vaults created by this user
+      console.log('Total on-chain vaults parsed:', onChainVaults.length);
+
+      const created = onChainVaults
         .filter((meta) => {
           const isValid =
             meta.amountLocked !== undefined &&
@@ -67,12 +131,12 @@ export default function VaultsPage() {
           unlockUnix: meta.unlockUnix,
           beneficiary: meta.beneficiary,
           creator: meta.creator,
-          released: meta.released || false,
-          cancelled: meta.cancelled || false,
+          released: meta.released,
+          cancelled: meta.cancelled,
         }));
 
       // Filter vaults where this user is the beneficiary
-      const beneficiary = cache
+      const beneficiary = onChainVaults
         .filter((meta) => {
           const isValid =
             meta.amountLocked !== undefined &&
@@ -87,9 +151,13 @@ export default function VaultsPage() {
           unlockUnix: meta.unlockUnix,
           beneficiary: meta.beneficiary,
           creator: meta.creator,
-          released: meta.released || false,
-          cancelled: meta.cancelled || false,
+          released: meta.released,
+          cancelled: meta.cancelled,
         }));
+
+      console.log('Created vaults:', created.length);
+      console.log('Active vaults (not released, has funds):', created.filter(v => !v.released && !v.cancelled && v.amountLocked > 0).length);
+      console.log('Released/cancelled vaults:', created.filter(v => v.released || v.cancelled).length);
 
       setCreatedVaults(created);
       setBeneficiaryVaults(beneficiary);
@@ -104,9 +172,16 @@ export default function VaultsPage() {
     return null;
   }
 
-  const activeVaults = activeTab === 'created' ? createdVaults : beneficiaryVaults;
-  const totalLocked = activeVaults.reduce((sum, v) => sum + (v.cancelled ? 0 : v.amountLocked), 0);
-  const activeCount = activeVaults.filter(v => !v.released && !v.cancelled).length;
+  const allVaults = activeTab === 'created' ? createdVaults : beneficiaryVaults;
+
+  // Separate active vaults from history
+  // Active vaults: have funds AND not released/cancelled
+  // History vaults: released OR cancelled (regardless of amountLocked due to old bug)
+  const activeVaults = allVaults.filter(v => !v.released && !v.cancelled && v.amountLocked > 0);
+  const historyVaults = allVaults.filter(v => v.released || v.cancelled);
+
+  const totalLocked = activeVaults.reduce((sum, v) => sum + v.amountLocked, 0);
+  const activeCount = activeVaults.length;
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-md">
@@ -230,9 +305,9 @@ export default function VaultsPage() {
         </div>
       )}
 
-      {/* Vault List */}
+      {/* Active Vault List */}
       {!loading && activeVaults.length > 0 && (
-        <div className="space-y-3">
+        <div className="space-y-3 mb-6">
           {activeVaults.map((vault) => (
             <VaultCard
               key={vault.vaultPda}
@@ -247,6 +322,69 @@ export default function VaultsPage() {
               isCreator={activeTab === 'created'}
             />
           ))}
+        </div>
+      )}
+
+      {/* History Section - Collapsible */}
+      {!loading && (
+        <div className="mt-8 border-t border-warm-200 pt-6">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="w-full flex items-center justify-between p-4 bg-white hover:bg-warm-50 rounded-xl border border-warm-200 transition-colors mb-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-warm-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-warm-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="text-left">
+                <h3 className="font-semibold text-warm-900">Vault History</h3>
+                <p className="text-sm text-warm-600">{historyVaults.length} closed vault{historyVaults.length !== 1 ? 's' : ''}</p>
+              </div>
+            </div>
+            <svg
+              className={`w-5 h-5 text-warm-600 transition-transform duration-200 ${
+                showHistory ? 'rotate-180' : ''
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {showHistory && (
+            <div className="space-y-3 animate-[slideDown_200ms_ease-out]">
+              {historyVaults.length === 0 ? (
+                <div className="text-center py-8 bg-warm-50 rounded-xl border border-warm-200">
+                  <div className="w-12 h-12 bg-warm-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <svg className="w-6 h-6 text-warm-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <p className="text-warm-600 text-sm">No closed vaults yet</p>
+                  <p className="text-warm-500 text-xs mt-1">Released and cancelled vaults will appear here</p>
+                </div>
+              ) : (
+                historyVaults.map((vault) => (
+                  <VaultCard
+                    key={vault.vaultPda}
+                    vaultPda={vault.vaultPda}
+                    name={vault.name}
+                    amountLocked={vault.amountLocked}
+                    unlockUnix={vault.unlockUnix}
+                    beneficiary={vault.beneficiary}
+                    creator={vault.creator}
+                    released={vault.released}
+                    cancelled={vault.cancelled}
+                    isCreator={activeTab === 'created'}
+                  />
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

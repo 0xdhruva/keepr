@@ -7,7 +7,7 @@ import { PublicKey } from '@solana/web3.js';
 import { AnchorProvider, Program, BN } from '@coral-xyz/anchor';
 import { connection, PROGRAM_ID, USDC_MINT } from '../../../_lib/solana';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { getVaultCache, updateVaultMeta } from '../../../_lib/storage';
+import { getVaultCache, saveVaultMeta } from '../../../_lib/storage';
 import { formatUSDC } from '../../../_lib/format';
 import idl from '../../../_lib/keepr_vault.json';
 import Link from 'next/link';
@@ -144,7 +144,11 @@ export default function CancelVaultPage() {
       setTxSignature(tx);
 
       // Update local storage
-      updateVaultMeta(vaultPda, { cancelled: true, released: false });
+      saveVaultMeta({
+        ...vault,
+        cancelled: true,
+        released: false,
+      });
 
       setSuccess(true);
     } catch (err: any) {

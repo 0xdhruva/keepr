@@ -76,6 +76,40 @@
   --color-mint-400: #4ade80;
   --color-mint-500: #22c55e;
 
+  /* Bright Green Palette (for template cards - more engaging) */
+  --color-neon-green-50: #ecfdf5;
+  --color-neon-green-100: #d1fae5;
+  --color-neon-green-200: #a7f3d0;
+  --color-neon-green-300: #6ee7b7;
+  --color-neon-green-400: #34d399;
+  --color-neon-green-500: #10b981;
+  --color-neon-green-600: #059669;
+  --color-neon-green-700: #047857;
+  --color-neon-green-800: #065f46;
+
+  /* Dark Palette (for hero card, bottom nav - modern & professional) */
+  --color-dark-50: #18181b;
+  --color-dark-100: #27272a;
+  --color-dark-200: #3f3f46;
+  --color-dark-300: #52525b;
+  --color-dark-400: #71717a;
+  --color-dark-500: #a1a1aa;
+  --color-dark-600: #d4d4d8;
+  --color-dark-700: #e4e4e7;
+  --color-dark-800: #f4f4f5;
+  --color-dark-900: #fafafa;
+
+  /* Purple/Pink Palette (for locked status - more engaging) */
+  --color-purple-pink-50: #fdf4ff;
+  --color-purple-pink-100: #fae8ff;
+  --color-purple-pink-200: #f5d0fe;
+  --color-purple-pink-300: #f0abfc;
+  --color-purple-pink-400: #e879f9;
+  --color-purple-pink-500: #d946ef;
+  --color-purple-pink-600: #c026d3;
+  --color-purple-pink-700: #a21caf;
+  --color-purple-pink-800: #86198f;
+
   /* Neutral Grays */
   --color-gray-50: #f9fafb;
   --color-gray-100: #f3f4f6;
@@ -155,6 +189,28 @@ body {
 /* Smooth transitions */
 * {
   transition-timing-function: var(--ease-out);
+}
+
+/* Hide scrollbar */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Slide down animation */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Wallet adapter overrides */
