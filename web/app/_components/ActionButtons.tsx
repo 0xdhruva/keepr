@@ -1,16 +1,46 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useEffect, useRef } from 'react';
 
 interface ActionButtonsProps {
   onTutorialClick: () => void;
 }
 
 export function ActionButtons({ onTutorialClick }: ActionButtonsProps) {
+  const router = useRouter();
+  const { connected } = useWallet();
+  const { setVisible } = useWalletModal();
+  const waitingForConnection = useRef(false);
+
+  useEffect(() => {
+    if (connected && waitingForConnection.current) {
+      waitingForConnection.current = false;
+      router.push('/create');
+    }
+  }, [connected, router]);
+
+  const handleNewVaultClick = () => {
+    if (connected) {
+      router.push('/create');
+    } else {
+      waitingForConnection.current = true;
+      try {
+        setVisible(true);
+      } catch (error) {
+        // User rejected wallet connection - reset flag
+        waitingForConnection.current = false;
+      }
+    }
+  };
+
   const actions = [
     {
       label: 'New Vault',
-      href: '/create',
+      onClick: handleNewVaultClick,
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

@@ -1,6 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useEffect, useRef } from 'react';
 
 interface TutorialModalProps {
   isOpen: boolean;
@@ -8,6 +12,33 @@ interface TutorialModalProps {
 }
 
 export function TutorialModal({ isOpen, onClose }: TutorialModalProps) {
+  const router = useRouter();
+  const { connected } = useWallet();
+  const { setVisible } = useWalletModal();
+  const waitingForConnection = useRef(false);
+
+  useEffect(() => {
+    if (connected && waitingForConnection.current) {
+      waitingForConnection.current = false;
+      router.push('/create');
+    }
+  }, [connected, router]);
+
+  const handleCreateFirstVaultClick = () => {
+    onClose(); // Close the tutorial modal first
+    if (connected) {
+      router.push('/create');
+    } else {
+      waitingForConnection.current = true;
+      try {
+        setVisible(true);
+      } catch (error) {
+        // User rejected wallet connection - reset flag
+        waitingForConnection.current = false;
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
   const steps = [
@@ -110,13 +141,12 @@ export function TutorialModal({ isOpen, onClose }: TutorialModalProps) {
         {/* Footer */}
         <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 p-6 rounded-b-2xl">
           <div className="flex gap-3">
-            <Link
-              href="/create"
+            <button
+              onClick={handleCreateFirstVaultClick}
               className="flex-1 px-6 py-3 bg-sage-600 hover:bg-sage-700 text-white rounded-xl font-semibold text-center transition-all"
-              onClick={onClose}
             >
               Create Your First Vault
-            </Link>
+            </button>
             <button
               onClick={onClose}
               className="px-6 py-3 bg-white hover:bg-gray-100 text-gray-700 rounded-xl font-semibold transition-all border border-gray-300"
