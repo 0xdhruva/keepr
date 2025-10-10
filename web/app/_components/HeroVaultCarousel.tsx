@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { HeroVaultCard } from './HeroVaultCard';
 import { getVaultCache } from '../_lib/storage';
@@ -19,10 +21,34 @@ interface Vault {
 }
 
 export function HeroVaultCarousel() {
-  const { publicKey } = useWallet();
+  const { publicKey, connected } = useWallet();
+  const { setVisible } = useWalletModal();
+  const router = useRouter();
   const [vaults, setVaults] = useState<Vault[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const waitingForConnection = useRef(false);
+
+  useEffect(() => {
+    if (connected && waitingForConnection.current) {
+      waitingForConnection.current = false;
+      router.push('/create');
+    }
+  }, [connected, router]);
+
+  const handleCreateFirstVaultClick = () => {
+    if (connected) {
+      router.push('/create');
+    } else {
+      waitingForConnection.current = true;
+      try {
+        setVisible(true);
+      } catch (error) {
+        // User rejected wallet connection - reset flag
+        waitingForConnection.current = false;
+      }
+    }
+  };
 
   // Memoize vault filtering and sorting to avoid recalculation on every render
   const sortedVaults = useMemo(() => {
@@ -149,12 +175,12 @@ export function HeroVaultCarousel() {
               </div>
 
               {/* CTA Button */}
-              <Link
-                href="/create"
+              <button
+                onClick={handleCreateFirstVaultClick}
                 className="block w-full py-3 bg-gradient-to-r from-neon-green-500 to-neon-green-600 text-white text-center rounded-xl font-bold hover:from-neon-green-600 hover:to-neon-green-700 transition-all shadow-lg"
               >
                 Create Your First Vault
-              </Link>
+              </button>
             </div>
 
             {/* Layered Vault Door Effect (background layers for 3D depth) */}
