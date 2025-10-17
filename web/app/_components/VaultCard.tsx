@@ -14,6 +14,10 @@ interface VaultCardProps {
   released: boolean;
   cancelled?: boolean;
   isCreator: boolean;
+  tier?: number;
+  checkinPeriodSeconds?: number;
+  notificationWindowSeconds?: number;
+  lastCheckinUnix?: number;
 }
 
 export function VaultCard({
@@ -26,15 +30,33 @@ export function VaultCard({
   released,
   cancelled,
   isCreator,
+  tier,
+  checkinPeriodSeconds,
+  notificationWindowSeconds,
+  lastCheckinUnix,
 }: VaultCardProps) {
   const now = Math.floor(Date.now() / 1000);
-  const isUnlocked = now >= unlockUnix;
+  
+  // Calculate effective unlock time (handles check-ins)
+  const effectiveUnlock = lastCheckinUnix && lastCheckinUnix > 0 && checkinPeriodSeconds
+    ? lastCheckinUnix + checkinPeriodSeconds
+    : unlockUnix;
+  
+  const isUnlocked = now >= effectiveUnlock;
 
-  const status = cancelled ? 'cancelled' : released ? 'released' : isUnlocked ? 'unlocked' : 'locked';
+  // Calculate if in notification window
+  const notificationStart = notificationWindowSeconds ? effectiveUnlock - notificationWindowSeconds : 0;
+  const isInNotificationWindow = notificationWindowSeconds ? (now >= notificationStart && now < effectiveUnlock) : false;
+
+  const status = cancelled ? 'cancelled' : released ? 'released' : isUnlocked ? 'unlocked' : isInNotificationWindow ? 'checkin' : 'locked';
+
+  const tierNames = ['Base', 'Plus', 'Premium', 'Lifetime'];
+  const tierColors = ['bg-blue-100 text-blue-700 border-blue-200', 'bg-purple-100 text-purple-700 border-purple-200', 'bg-orange-100 text-orange-700 border-orange-200', 'bg-emerald-100 text-emerald-700 border-emerald-200'];
 
   // Pastel backgrounds based on status
   const bgColors = {
     locked: 'from-lavender-100 to-lavender-200 border-lavender-300/50',
+    checkin: 'from-blue-100 to-blue-200 border-blue-300/50',
     unlocked: 'from-mint-100 to-mint-200 border-mint-300/50',
     released: 'from-rose-100 to-rose-200 border-rose-300/50',
     cancelled: 'from-warm-100 to-warm-200 border-warm-300/50',
@@ -46,13 +68,25 @@ export function VaultCard({
         {/* Header */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
-            <p className="text-xs text-gray-600 mb-1">{name}</p>
+            <div className="flex items-center gap-2 mb-1">
+              <p className="text-xs text-gray-600">{name}</p>
+              {tier !== undefined && (
+                <span className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${tierColors[tier]}`}>
+                  {tierNames[tier]}
+                </span>
+              )}
+            </div>
             <h3 className="text-3xl font-bold text-gray-900">{formatUSDC(amountLocked)}</h3>
           </div>
           <div className="w-10 h-10 bg-white/50 rounded-full flex items-center justify-center">
             {status === 'locked' && (
               <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            )}
+            {status === 'checkin' && (
+              <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             )}
             {status === 'unlocked' && (
@@ -102,9 +136,9 @@ export function VaultCard({
             Released
           </div>
         )}
-        {(status === 'locked' || status === 'unlocked') && !cancelled && (
+        {(status === 'locked' || status === 'checkin' || status === 'unlocked') && !cancelled && (
           <button className="w-full px-4 py-2.5 bg-sage-600 hover:bg-sage-700 text-white text-sm font-medium rounded-xl transition-colors shadow-sm">
-            {isUnlocked && !isCreator ? 'Release Funds' : 'View Details'}
+            {status === 'checkin' && isCreator ? 'Check In Now' : isUnlocked && !isCreator ? 'Release Funds' : 'View Details'}
           </button>
         )}
       </div>

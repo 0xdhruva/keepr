@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { formatUSDC } from '../_lib/format';
-import { getVaultCache } from '../_lib/storage';
 import { useNotifications } from '../_contexts/NotificationContext';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { connection, PROGRAM_ID } from '../_lib/solana';
 
 interface TopBarProps {
   onMenuClick: () => void;
@@ -14,20 +15,50 @@ interface TopBarProps {
 export function TopBar({ onMenuClick, onNotificationClick }: TopBarProps) {
   const { publicKey } = useWallet();
   const { unreadCount } = useNotifications();
+  const [totalLocked, setTotalLocked] = useState(0);
 
-  // Memoize total locked calculation to avoid recalculation on every render
-  const totalLocked = useMemo(() => {
-    if (!publicKey) return 0;
-
-    const cache = getVaultCache();
-    const userVaults = cache.filter(vault =>
-      vault.creator === publicKey.toBase58() &&
-      !vault.released &&
-      !vault.cancelled
-    );
-
-    return userVaults.reduce((sum, vault) => sum + (vault.amountLocked || 0), 0);
+  // Fetch total locked from blockchain on mount
+  useEffect(() => {
+    if (publicKey) {
+      loadTotalLockedFromBlockchain();
+    } else {
+      setTotalLocked(0);
+    }
   }, [publicKey]);
+
+  const loadTotalLockedFromBlockchain = async () => {
+    if (!publicKey) return;
+
+    try {
+      const programId = new PublicKey(PROGRAM_ID);
+      
+      // Fetch all vaults where user is creator
+      const accounts = await connection.getProgramAccounts(programId, {
+        filters: [
+          { dataSize: 237 },
+          { memcmp: { offset: 8, bytes: publicKey.toBase58() } },
+        ],
+      });
+
+      let total = 0;
+      for (const { account } of accounts) {
+        const data = account.data;
+        const released = data[152] === 1;
+        const cancelled = data[153] === 1;
+
+        // Only count active vaults
+        if (!released && !cancelled) {
+          const amountLockedBuf = data.slice(136, 144);
+          const amountLocked = Number(new DataView(amountLockedBuf.buffer, amountLockedBuf.byteOffset, 8).getBigUint64(0, true));
+          total += amountLocked;
+        }
+      }
+
+      setTotalLocked(total);
+    } catch (error) {
+      console.error('Failed to load total locked from blockchain:', error);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 w-full bg-white border-b border-gray-200 lg:hidden">

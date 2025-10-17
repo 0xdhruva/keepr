@@ -4,7 +4,9 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { VaultCard } from '../_components/VaultCard';
-import { getVaultCache, updateLastSeen } from '../_lib/storage';
+import { getVaultCache, updateLastSeen, saveVaultMeta } from '../_lib/storage';
+import { checkAllVaultNotifications, filterDismissedNotifications, type VaultForNotification } from '../_lib/notifications';
+import { NotificationBanner } from '../_components/NotificationBanner';
 import Link from 'next/link';
 import { Connection, PublicKey } from '@solana/web3.js';
 
@@ -17,6 +19,11 @@ interface Vault {
   creator: string;
   released: boolean;
   cancelled?: boolean;
+  tier?: number;
+  checkinPeriodSeconds?: number;
+  notificationWindowSeconds?: number;
+  gracePeriodSeconds?: number;
+  lastCheckinUnix?: number;
 }
 
 type TabView = 'created' | 'beneficiary';
@@ -29,6 +36,7 @@ export default function VaultsPage() {
   const [beneficiaryVaults, setBeneficiaryVaults] = useState<Vault[]>([]);
   const [loading, setLoading] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
+  const [notificationKey, setNotificationKey] = useState(0); // Force re-render on dismiss
 
   useEffect(() => {
     if (!connected) {
@@ -75,9 +83,9 @@ export default function VaultsPage() {
         try {
           const data = account.account.data;
 
-          // Filter out old schema vaults (188 bytes vs current 216 bytes)
+          // Filter out old schema vaults
           // Old vaults are undeserializable and should be hidden
-          const CURRENT_VAULT_SIZE = 216; // 8 discriminator + 208 struct data
+          const CURRENT_VAULT_SIZE = 237; // 8 discriminator + 229 struct data (with dead man's switch fields)
           if (data.length !== CURRENT_VAULT_SIZE) {
             console.log('Skipping vault with old schema:', account.pubkey.toBase58().slice(0, 8) + '... (size:', data.length, 'bytes, expected:', CURRENT_VAULT_SIZE, ')');
             return null;
@@ -89,9 +97,18 @@ export default function VaultsPage() {
           const unlockUnixBuf = data.slice(144, 152);
           const released = data[152] === 1;
           const cancelled = data[153] === 1;
+          const notificationWindowBuf = data.slice(200, 204);
+          const gracePeriodBuf = data.slice(204, 208);
+          const lastCheckinBuf = data.slice(208, 216);
+          const tier = data[216];
+          const checkinPeriodBuf = data.slice(233, 237);
 
           const amountLocked = Number(new DataView(amountLockedBuf.buffer, amountLockedBuf.byteOffset, 8).getBigUint64(0, true));
           const unlockUnix = Number(new DataView(unlockUnixBuf.buffer, unlockUnixBuf.byteOffset, 8).getBigInt64(0, true));
+          const notificationWindowSeconds = new DataView(notificationWindowBuf.buffer, notificationWindowBuf.byteOffset, 4).getUint32(0, true);
+          const gracePeriodSeconds = new DataView(gracePeriodBuf.buffer, gracePeriodBuf.byteOffset, 4).getUint32(0, true);
+          const lastCheckinUnix = Number(new DataView(lastCheckinBuf.buffer, lastCheckinBuf.byteOffset, 8).getBigInt64(0, true));
+          const checkinPeriodSeconds = new DataView(checkinPeriodBuf.buffer, checkinPeriodBuf.byteOffset, 4).getUint32(0, true);
 
           // Find cached metadata or use defaults
           const cachedMeta = cache.find((m) => m.vaultPda === account.pubkey.toBase58());
@@ -105,6 +122,11 @@ export default function VaultsPage() {
             unlockUnix,
             released,
             cancelled,
+            tier,
+            checkinPeriodSeconds,
+            notificationWindowSeconds,
+            gracePeriodSeconds,
+            lastCheckinUnix,
           };
         } catch (error) {
           console.error('Error parsing vault', account.pubkey.toBase58(), error);
@@ -133,6 +155,11 @@ export default function VaultsPage() {
           creator: meta.creator,
           released: meta.released,
           cancelled: meta.cancelled,
+          tier: meta.tier,
+          checkinPeriodSeconds: meta.checkinPeriodSeconds,
+          notificationWindowSeconds: meta.notificationWindowSeconds,
+          gracePeriodSeconds: meta.gracePeriodSeconds,
+          lastCheckinUnix: meta.lastCheckinUnix,
         }));
 
       // Filter vaults where this user is the beneficiary
@@ -153,14 +180,90 @@ export default function VaultsPage() {
           creator: meta.creator,
           released: meta.released,
           cancelled: meta.cancelled,
+          tier: meta.tier,
+          checkinPeriodSeconds: meta.checkinPeriodSeconds,
+          notificationWindowSeconds: meta.notificationWindowSeconds,
+          gracePeriodSeconds: meta.gracePeriodSeconds,
+          lastCheckinUnix: meta.lastCheckinUnix,
         }));
 
       console.log('Created vaults:', created.length);
       console.log('Active vaults (not released, has funds):', created.filter(v => !v.released && !v.cancelled && v.amountLocked > 0).length);
       console.log('Released/cancelled vaults:', created.filter(v => v.released || v.cancelled).length);
 
-      setCreatedVaults(created);
-      setBeneficiaryVaults(beneficiary);
+      // Update cache with fresh on-chain data
+      onChainVaults.forEach((vault) => {
+        const cachedMeta = cache.find((m) => m.vaultPda === vault.vaultPda);
+        saveVaultMeta({
+          vaultPda: vault.vaultPda,
+          name: vault.name,
+          createdAt: cachedMeta?.createdAt || Date.now(),
+          lastRefreshed: Date.now(),
+          unlockUnix: vault.unlockUnix,
+          amountLocked: vault.amountLocked,
+          beneficiary: vault.beneficiary,
+          creator: vault.creator,
+          released: vault.released,
+          cancelled: vault.cancelled,
+          tier: vault.tier,
+          checkinPeriodSeconds: vault.checkinPeriodSeconds,
+          notificationWindowSeconds: vault.notificationWindowSeconds,
+          gracePeriodSeconds: vault.gracePeriodSeconds,
+          lastCheckinUnix: vault.lastCheckinUnix,
+        });
+      });
+
+      // Include historical vaults from cache (released/cancelled vaults that may be closed on-chain)
+      const historicalVaults = cache.filter(v => 
+        (v.released || v.cancelled) && 
+        (v.creator === userAddress || v.beneficiary === userAddress)
+      );
+
+      // Merge on-chain vaults with historical vaults (deduplicate by vaultPda)
+      const allCreatedVaults = [
+        ...created,
+        ...historicalVaults
+          .filter(v => v.creator === userAddress && !created.some(c => c.vaultPda === v.vaultPda))
+          .map(v => ({
+            vaultPda: v.vaultPda,
+            name: v.name,
+            amountLocked: v.amountLocked || 0,
+            unlockUnix: v.unlockUnix || 0,
+            beneficiary: v.beneficiary,
+            creator: v.creator,
+            released: v.released || false,
+            cancelled: v.cancelled || false,
+            tier: v.tier,
+            checkinPeriodSeconds: v.checkinPeriodSeconds,
+            notificationWindowSeconds: v.notificationWindowSeconds,
+            gracePeriodSeconds: v.gracePeriodSeconds,
+            lastCheckinUnix: v.lastCheckinUnix,
+          }))
+      ];
+
+      const allBeneficiaryVaults = [
+        ...beneficiary,
+        ...historicalVaults
+          .filter(v => v.beneficiary === userAddress && v.creator !== userAddress && !beneficiary.some(b => b.vaultPda === v.vaultPda))
+          .map(v => ({
+            vaultPda: v.vaultPda,
+            name: v.name,
+            amountLocked: v.amountLocked || 0,
+            unlockUnix: v.unlockUnix || 0,
+            beneficiary: v.beneficiary,
+            creator: v.creator,
+            released: v.released || false,
+            cancelled: v.cancelled || false,
+            tier: v.tier,
+            checkinPeriodSeconds: v.checkinPeriodSeconds,
+            notificationWindowSeconds: v.notificationWindowSeconds,
+            gracePeriodSeconds: v.gracePeriodSeconds,
+            lastCheckinUnix: v.lastCheckinUnix,
+          }))
+      ];
+
+      setCreatedVaults(allCreatedVaults);
+      setBeneficiaryVaults(allBeneficiaryVaults);
     } catch (error) {
       console.error('Error loading vaults:', error);
     } finally {
@@ -182,6 +285,29 @@ export default function VaultsPage() {
 
   const totalLocked = activeVaults.reduce((sum, v) => sum + v.amountLocked, 0);
   const activeCount = activeVaults.length;
+
+  // Calculate notifications for all vaults (both created and beneficiary)
+  const allVaultsForNotifications: VaultForNotification[] = [...createdVaults, ...beneficiaryVaults]
+    .filter(v => v.notificationWindowSeconds !== undefined && v.gracePeriodSeconds !== undefined)
+    .map(v => ({
+      vaultPda: v.vaultPda,
+      name: v.name,
+      unlockUnix: v.unlockUnix,
+      notificationWindowSeconds: v.notificationWindowSeconds!,
+      gracePeriodSeconds: v.gracePeriodSeconds || 0, // Add default if undefined
+      released: v.released,
+      cancelled: v.cancelled || false,
+      isCreator: v.creator === publicKey?.toBase58(),
+      beneficiary: v.beneficiary,
+    }));
+
+  const allNotifications = checkAllVaultNotifications(allVaultsForNotifications);
+  const activeNotifications = filterDismissedNotifications(allNotifications);
+
+  const handleDismissNotification = () => {
+    // Force re-render to update notification list
+    setNotificationKey(prev => prev + 1);
+  };
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-md">
@@ -241,6 +367,16 @@ export default function VaultsPage() {
           </div>
         </button>
       </div>
+
+      {/* Notifications */}
+      {activeNotifications.length > 0 && (
+        <div className="mb-6" key={notificationKey}>
+          <NotificationBanner
+            notifications={activeNotifications}
+            onDismiss={handleDismissNotification}
+          />
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-6">
@@ -320,6 +456,10 @@ export default function VaultsPage() {
               released={vault.released}
               cancelled={vault.cancelled}
               isCreator={activeTab === 'created'}
+              tier={vault.tier}
+              checkinPeriodSeconds={vault.checkinPeriodSeconds}
+              notificationWindowSeconds={vault.notificationWindowSeconds}
+              lastCheckinUnix={vault.lastCheckinUnix}
             />
           ))}
         </div>
@@ -380,6 +520,10 @@ export default function VaultsPage() {
                     released={vault.released}
                     cancelled={vault.cancelled}
                     isCreator={activeTab === 'created'}
+                    tier={vault.tier}
+                    checkinPeriodSeconds={vault.checkinPeriodSeconds}
+                    notificationWindowSeconds={vault.notificationWindowSeconds}
+                    lastCheckinUnix={vault.lastCheckinUnix}
                   />
                 ))
               )}

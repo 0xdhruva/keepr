@@ -4,295 +4,401 @@
     "name": "keepr_vault",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "Time-locked USDC vaults with dead man's switch"
+    "description": "Time-locked USDC vaults on Solana"
   },
   "instructions": [
     {
-      "name": "initConfig",
-      "discriminator": [
-        23,
-        235,
-        115,
-        232,
-        168,
-        96,
-        1,
-        231
+      "name": "cancel_vault",
+      "docs": [
+        "Cancel vault and return funds to creator (creator only, before release)"
       ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "systemProgram",
-          "writable": false,
-          "signer": false
-        }
-      ],
-      "args": [
-        {
-          "name": "usdcMint",
-          "type": "pubkey"
-        },
-        {
-          "name": "maxLockPerVault",
-          "type": "u64"
-        },
-        {
-          "name": "paused",
-          "type": "bool"
-        }
-      ]
-    },
-    {
-      "name": "updateConfig",
       "discriminator": [
-        29,
-        158,
+        150,
+        95,
+        141,
         252,
-        191,
-        10,
-        83,
-        219,
-        99
+        158,
+        53,
+        60,
+        102
       ],
       "accounts": [
         {
           "name": "config",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "admin",
-          "writable": false,
-          "signer": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "createVault",
-      "discriminator": [
-        29,
-        237,
-        247,
-        208,
-        193,
-        82,
-        54,
-        135
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "counter",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "vault",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "vaultTokenAccount",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "usdcMint",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "creator",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "associatedTokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "systemProgram",
-          "writable": false,
-          "signer": false
-        }
-      ],
-      "args": [
-        {
-          "name": "beneficiary",
-          "type": "pubkey"
-        },
-        {
-          "name": "unlockUnix",
-          "type": "i64"
-        },
-        {
-          "name": "nameHash",
-          "type": {
-            "array": [
-              "u8",
-              32
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
             ]
           }
         },
         {
-          "name": "notificationWindowSeconds",
-          "type": "u32"
-        },
-        {
-          "name": "gracePeriodSeconds",
-          "type": "u32"
-        }
-      ]
-    },
-    {
-      "name": "depositUsdc",
-      "discriminator": [
-        184,
-        148,
-        250,
-        169,
-        224,
-        213,
-        34,
-        126
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": false,
-          "signer": false
-        },
-        {
           "name": "vault",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
         },
         {
           "name": "counter",
-          "writable": false,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
-          "name": "vaultTokenAccount",
+          "name": "vault_token_account",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
-          "name": "usdcMint",
-          "writable": false,
-          "signer": false
+          "name": "usdc_mint"
         },
         {
-          "name": "creatorUsdcAta",
+          "name": "creator_usdc_ata",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "treasury_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "config.treasury",
+                "account": "Config"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "creator",
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
         },
         {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "release",
-      "discriminator": [
-        253,
-        249,
-        15,
-        206,
-        28,
-        127,
-        193,
-        241
-      ],
-      "accounts": [
-        {
-          "name": "vault",
-          "writable": true,
-          "signer": false
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
-          "name": "counter",
-          "writable": false,
-          "signer": false
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
         {
-          "name": "vaultTokenAccount",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "usdcMint",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "beneficiaryUsdcAta",
-          "writable": true,
-          "signer": false
-        },
-        {
-          "name": "beneficiary",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "associatedTokenProgram",
-          "writable": false,
-          "signer": false
-        },
-        {
-          "name": "systemProgram",
-          "writable": false,
-          "signer": false
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
     },
     {
-      "name": "checkIn",
+      "name": "check_in",
+      "docs": [
+        "Check-in to reset vault deadline (creator only, during notification window)"
+      ],
       "discriminator": [
         209,
         253,
@@ -307,23 +413,117 @@
         {
           "name": "vault",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
         },
         {
           "name": "counter",
-          "writable": false,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "creator",
-          "writable": false,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_config",
+      "docs": [
+        "Close config account (admin only, for devnet schema migrations)"
+      ],
+      "discriminator": [
+        145,
+        9,
+        72,
+        157,
+        95,
+        125,
+        61,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
           "signer": true
         }
       ],
       "args": []
     },
     {
-      "name": "closeVault",
+      "name": "close_vault",
+      "docs": [
+        "Close vault and reclaim rent (creator only, post-release)"
+      ],
       "discriminator": [
         141,
         103,
@@ -338,94 +538,1168 @@
         {
           "name": "vault",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.creator",
+                "account": "Vault"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
         },
         {
-          "name": "vaultTokenAccount",
+          "name": "vault_token_account",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.usdc_mint",
+                "account": "Vault"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "creator",
-          "writable": true,
-          "signer": false
+          "writable": true
         },
         {
           "name": "signer",
-          "writable": false,
+          "docs": [
+            "Anyone can sign to close a released vault"
+          ],
           "signer": true
         },
         {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
     },
     {
-      "name": "cancelVault",
+      "name": "create_vault",
+      "docs": [
+        "Create a new vault (deposit separately)"
+      ],
       "discriminator": [
-        150,
+        29,
+        237,
+        247,
+        208,
+        193,
+        82,
+        54,
+        135
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "counter",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "vault_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "beneficiary",
+          "type": "pubkey"
+        },
+        {
+          "name": "checkin_period_seconds",
+          "type": "u32"
+        },
+        {
+          "name": "name_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "notification_window_seconds",
+          "type": "u32"
+        },
+        {
+          "name": "grace_period_seconds",
+          "type": "u32"
+        },
+        {
+          "name": "tier",
+          "type": {
+            "defined": {
+              "name": "VaultTier"
+            }
+          }
+        },
+        {
+          "name": "creation_fee_paid",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit_usdc",
+      "docs": [
+        "Deposit additional USDC into existing vault"
+      ],
+      "discriminator": [
+        184,
+        148,
+        250,
+        169,
+        224,
+        213,
+        34,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "counter",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "creator_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fix_released_vault",
+      "docs": [
+        "Fix stuck vault (admin only) - for vaults that are released but have incorrect amount_locked",
+        "This is a recovery function for a bug where released vaults weren't zeroing amount_locked"
+      ],
+      "discriminator": [
+        107,
+        12,
+        101,
+        98,
+        86,
         95,
-        141,
-        252,
-        158,
-        53,
-        60,
-        102
+        30,
+        8
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.creator",
+                "account": "Vault"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_token_account",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.usdc_mint",
+                "account": "Vault"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "init_config",
+      "docs": [
+        "Initialize the global config (one-time, admin only)"
+      ],
+      "discriminator": [
+        23,
+        235,
+        115,
+        232,
+        168,
+        96,
+        1,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_mint",
+          "type": "pubkey"
+        },
+        {
+          "name": "max_lock_per_vault",
+          "type": "u64"
+        },
+        {
+          "name": "paused",
+          "type": "bool"
+        },
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "release",
+      "docs": [
+        "Release funds to beneficiary (time-locked)",
+        "Note: Any signer can call this; PDA signs the transfer via seeds"
+      ],
+      "discriminator": [
+        253,
+        249,
+        15,
+        206,
+        28,
+        127,
+        193,
+        241
       ],
       "accounts": [
         {
           "name": "vault",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.creator",
+                "account": "Vault"
+              },
+              {
+                "kind": "account",
+                "path": "vault.vault_id",
+                "account": "Vault"
+              }
+            ]
+          }
         },
         {
           "name": "counter",
-          "writable": false,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.creator",
+                "account": "Vault"
+              }
+            ]
+          }
         },
         {
-          "name": "vaultTokenAccount",
+          "name": "vault_token_account",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
-          "name": "usdcMint",
-          "writable": false,
-          "signer": false
+          "name": "usdc_mint"
         },
         {
-          "name": "creatorUsdcAta",
+          "name": "beneficiary_usdc_ata",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "beneficiary"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
-          "name": "creator",
+          "name": "beneficiary",
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "payer",
           "writable": true,
           "signer": true
         },
         {
-          "name": "tokenProgram",
-          "writable": false,
-          "signer": false
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
-          "name": "associatedTokenProgram",
-          "writable": false,
-          "signer": false
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
         {
-          "name": "systemProgram",
-          "writable": false,
-          "signer": false
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
     },
     {
-      "name": "updateAdminTestWallets",
+      "name": "update_admin_test_wallets",
+      "docs": [
+        "Update admin test wallets list (admin only)"
+      ],
       "discriminator": [
         78,
         232,
@@ -440,12 +1714,28 @@
         {
           "name": "config",
           "writable": true,
-          "signer": false
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         },
         {
           "name": "admin",
-          "writable": false,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         }
       ],
       "args": [
@@ -453,6 +1743,70 @@
           "name": "wallets",
           "type": {
             "vec": "pubkey"
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_config",
+      "docs": [
+        "Update config parameters (admin only)"
+      ],
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_mint",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "max_lock_per_vault",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "paused",
+          "type": {
+            "option": "bool"
           }
         }
       ]
@@ -473,19 +1827,6 @@
       ]
     },
     {
-      "name": "VaultCounter",
-      "discriminator": [
-        180,
-        127,
-        122,
-        230,
-        154,
-        126,
-        126,
-        98
-      ]
-    },
-    {
       "name": "Vault",
       "discriminator": [
         211,
@@ -497,219 +1838,19 @@
         117,
         119
       ]
-    }
-  ],
-  "types": [
-    {
-      "name": "Config",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "admin",
-            "type": "pubkey"
-          },
-          {
-            "name": "usdcMint",
-            "type": "pubkey"
-          },
-          {
-            "name": "maxLockPerVault",
-            "type": "u64"
-          },
-          {
-            "name": "paused",
-            "type": "bool"
-          },
-          {
-            "name": "adminTestWallets",
-            "type": {
-              "vec": "pubkey"
-            }
-          }
-        ]
-      }
     },
     {
       "name": "VaultCounter",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "lastId",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "Vault",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
-            "name": "beneficiary",
-            "type": "pubkey"
-          },
-          {
-            "name": "usdcMint",
-            "type": "pubkey"
-          },
-          {
-            "name": "vaultTokenAccount",
-            "type": "pubkey"
-          },
-          {
-            "name": "amountLocked",
-            "type": "u64"
-          },
-          {
-            "name": "unlockUnix",
-            "type": "i64"
-          },
-          {
-            "name": "released",
-            "type": "bool"
-          },
-          {
-            "name": "cancelled",
-            "type": "bool"
-          },
-          {
-            "name": "isTestVault",
-            "type": "bool"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          },
-          {
-            "name": "nameHash",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "vaultId",
-            "type": "u64"
-          },
-          {
-            "name": "vaultPeriodSeconds",
-            "type": "u32"
-          },
-          {
-            "name": "notificationWindowSeconds",
-            "type": "u32"
-          },
-          {
-            "name": "gracePeriodSeconds",
-            "type": "u32"
-          },
-          {
-            "name": "lastCheckinUnix",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "ConfigUpdated",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "admin",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "VaultCreated",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
-            "name": "vault",
-            "type": "pubkey"
-          },
-          {
-            "name": "beneficiary",
-            "type": "pubkey"
-          },
-          {
-            "name": "unlockUnix",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "VaultFunded",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "vault",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "VaultReleased",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "vault",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
-          },
-          {
-            "name": "to",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "VaultCheckedIn",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "vault",
-            "type": "pubkey"
-          },
-          {
-            "name": "creator",
-            "type": "pubkey"
-          },
-          {
-            "name": "newUnlockUnix",
-            "type": "i64"
-          }
-        ]
-      }
+      "discriminator": [
+        180,
+        127,
+        122,
+        230,
+        154,
+        126,
+        126,
+        98
+      ]
     }
   ],
   "events": [
@@ -724,103 +1865,19 @@
         19,
         198,
         194
-      ],
-      "fields": [
-        {
-          "name": "admin",
-          "type": "pubkey",
-          "index": false
-        }
       ]
     },
     {
-      "name": "VaultCreated",
+      "name": "VaultCancelled",
       "discriminator": [
-        117,
-        25,
-        120,
-        254,
-        75,
-        236,
-        78,
-        115
-      ],
-      "fields": [
-        {
-          "name": "creator",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "vault",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "beneficiary",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "unlockUnix",
-          "type": "i64",
-          "index": false
-        }
-      ]
-    },
-    {
-      "name": "VaultFunded",
-      "discriminator": [
-        192,
-        119,
-        245,
-        193,
-        55,
-        223,
-        195,
-        50
-      ],
-      "fields": [
-        {
-          "name": "vault",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "amount",
-          "type": "u64",
-          "index": false
-        }
-      ]
-    },
-    {
-      "name": "VaultReleased",
-      "discriminator": [
-        71,
-        205,
-        57,
-        90,
-        244,
-        213,
-        241,
-        226
-      ],
-      "fields": [
-        {
-          "name": "vault",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "amount",
-          "type": "u64",
-          "index": false
-        },
-        {
-          "name": "to",
-          "type": "pubkey",
-          "index": false
-        }
+        137,
+        72,
+        110,
+        157,
+        80,
+        107,
+        59,
+        181
       ]
     },
     {
@@ -834,23 +1891,45 @@
         173,
         182,
         244
-      ],
-      "fields": [
-        {
-          "name": "vault",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "creator",
-          "type": "pubkey",
-          "index": false
-        },
-        {
-          "name": "newUnlockUnix",
-          "type": "i64",
-          "index": false
-        }
+      ]
+    },
+    {
+      "name": "VaultCreated",
+      "discriminator": [
+        117,
+        25,
+        120,
+        254,
+        75,
+        236,
+        78,
+        115
+      ]
+    },
+    {
+      "name": "VaultFunded",
+      "discriminator": [
+        192,
+        119,
+        245,
+        193,
+        55,
+        223,
+        195,
+        50
+      ]
+    },
+    {
+      "name": "VaultReleased",
+      "discriminator": [
+        71,
+        205,
+        57,
+        90,
+        244,
+        213,
+        241,
+        226
       ]
     }
   ],
@@ -949,6 +2028,309 @@
       "code": 6018,
       "name": "AdminTestWalletsLimitExceeded",
       "msg": "Admin test wallets list cannot exceed 10 wallets."
+    },
+    {
+      "code": 6019,
+      "name": "CannotCancelDuringWatchdog",
+      "msg": "Cannot cancel during watchdog period - prevents gaming the system."
+    },
+    {
+      "code": 6020,
+      "name": "InsufficientBalanceForClosingFee",
+      "msg": "Insufficient USDC balance to pay closing fee."
+    },
+    {
+      "code": 6021,
+      "name": "InvalidCheckinPeriod",
+      "msg": "Invalid check-in period - must be between 1 second and 1 year."
+    }
+  ],
+  "types": [
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_lock_per_vault",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "admin_test_wallets",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "treasury",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Vault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "beneficiary",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_locked",
+            "type": "u64"
+          },
+          {
+            "name": "unlock_unix",
+            "type": "i64"
+          },
+          {
+            "name": "released",
+            "type": "bool"
+          },
+          {
+            "name": "cancelled",
+            "type": "bool"
+          },
+          {
+            "name": "is_test_vault",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "name_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "vault_id",
+            "type": "u64"
+          },
+          {
+            "name": "vault_period_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "notification_window_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "grace_period_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "last_checkin_unix",
+            "type": "i64"
+          },
+          {
+            "name": "tier",
+            "type": {
+              "defined": {
+                "name": "VaultTier"
+              }
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "creation_fee_paid",
+            "type": "u64"
+          },
+          {
+            "name": "checkin_period_seconds",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_refunded",
+            "type": "u64"
+          },
+          {
+            "name": "closing_fee_paid",
+            "type": "u64"
+          },
+          {
+            "name": "in_grace_period",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultCheckedIn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_unlock_unix",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultCounter",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "last_id",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "beneficiary",
+            "type": "pubkey"
+          },
+          {
+            "name": "unlock_unix",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultFunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultReleased",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultTier",
+      "docs": [
+        "Vault pricing tier"
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Base"
+          },
+          {
+            "name": "Plus"
+          },
+          {
+            "name": "Premium"
+          },
+          {
+            "name": "Lifetime"
+          }
+        ]
+      }
     }
   ]
 }

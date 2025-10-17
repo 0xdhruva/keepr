@@ -6,9 +6,11 @@ import { useWallet } from '@solana/wallet-adapter-react';
 export type NotificationType =
   | 'vault_created'
   | 'checkin_required'
+  | 'checkin_success'
   | 'grace_period'
-  | 'added_beneficiary'
-  | 'vault_closing';
+  | 'vault_released'
+  | 'vault_cancelled'
+  | 'added_beneficiary';
 
 export interface Notification {
   id: string;

@@ -3,12 +3,13 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useRouter, useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, Transaction } from '@solana/web3.js';
 import { AnchorProvider, Program, BN } from '@coral-xyz/anchor';
 import { connection, PROGRAM_ID, USDC_MINT } from '../../../_lib/solana';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { getVaultCache, saveVaultMeta } from '../../../_lib/storage';
 import { formatUSDC } from '../../../_lib/format';
+import { useNotifications } from '../../../_contexts/NotificationContext';
 import idl from '../../../_lib/keepr_vault.json';
 import Link from 'next/link';
 
@@ -17,6 +18,7 @@ export default function CancelVaultPage() {
   const router = useRouter();
   const params = useParams();
   const vaultPda = params.vaultPda as string;
+  const { addNotification } = useNotifications();
 
   const [vault, setVault] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -39,36 +41,63 @@ export default function CancelVaultPage() {
 
   const loadVault = async () => {
     try {
-      const cache = getVaultCache();
-      const vaultMeta = cache.find(v => v.vaultPda === vaultPda);
+      // Fetch vault state from blockchain (not cache)
+      const vaultPdaKey = new PublicKey(vaultPda);
+      const vaultAccount = await connection.getAccountInfo(vaultPdaKey);
 
-      if (!vaultMeta) {
-        setError('Vault not found');
+      if (!vaultAccount) {
+        setError('Vault not found on blockchain');
         setLoading(false);
         return;
       }
 
+      // Deserialize vault data
+      const data = vaultAccount.data;
+      const creator = new PublicKey(data.slice(8, 40));
+      const beneficiary = new PublicKey(data.slice(40, 72));
+      const amountLockedBuf = data.slice(136, 144);
+      const unlockUnixBuf = data.slice(144, 152);
+      const released = data[152] === 1;
+      const cancelled = data[153] === 1;
+
+      const amountLocked = Number(new DataView(amountLockedBuf.buffer, amountLockedBuf.byteOffset, 8).getBigUint64(0, true));
+      const unlockUnix = Number(new DataView(unlockUnixBuf.buffer, unlockUnixBuf.byteOffset, 8).getBigInt64(0, true));
+
+      // Get vault name from cache (optional)
+      const cache = getVaultCache();
+      const vaultMeta = cache.find(v => v.vaultPda === vaultPda);
+      const name = vaultMeta?.name || 'Unnamed Vault';
+
       // Check if user is the creator
-      if (vaultMeta.creator !== publicKey?.toBase58()) {
+      if (creator.toBase58() !== publicKey?.toBase58()) {
         setError('Only the vault creator can cancel it');
         setLoading(false);
         return;
       }
 
       // Check if already cancelled or released
-      if (vaultMeta.cancelled) {
+      if (cancelled) {
         setError('Vault has already been cancelled');
         setLoading(false);
         return;
       }
 
-      if (vaultMeta.released) {
+      if (released) {
         setError('Cannot cancel a vault that has been released');
         setLoading(false);
         return;
       }
 
-      setVault(vaultMeta);
+      setVault({
+        vaultPda,
+        name,
+        creator: creator.toBase58(),
+        beneficiary: beneficiary.toBase58(),
+        amountLocked,
+        unlockUnix,
+        released,
+        cancelled,
+      });
     } catch (err: any) {
       console.error('Error loading vault:', err);
       setError(err.message || 'Failed to load vault');
@@ -101,6 +130,16 @@ export default function CancelVaultPage() {
       const vaultAccount = await program.account.vault.fetch(vaultPdaKey);
       const vaultId = (vaultAccount as any).vaultId;
 
+      // Derive config PDA
+      const [configPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('config')],
+        new PublicKey(PROGRAM_ID)
+      );
+
+      // Fetch config to get treasury address
+      const configAccount = await program.account.config.fetch(configPda);
+      const treasury = (configAccount as any).treasury;
+
       // Derive counter PDA
       const [counterPda] = PublicKey.findProgramAddressSync(
         [Buffer.from('vault_counter'), creatorKey.toBuffer()],
@@ -119,26 +158,62 @@ export default function CancelVaultPage() {
         creatorKey
       );
 
+      // Get treasury USDC ATA
+      const treasuryUsdcAta = await getAssociatedTokenAddress(
+        new PublicKey(USDC_MINT),
+        treasury
+      );
+
       console.log('Cancelling vault...');
       console.log('Vault PDA:', vaultPda);
       console.log('Creator:', creatorKey.toBase58());
       console.log('Vault ID:', vaultId.toString());
+      console.log('Treasury:', treasury.toBase58());
 
-      // Call cancel_vault instruction
-      const tx = await program.methods
+      // Check if treasury ATA exists, create if needed
+      const treasuryAtaInfo = await connection.getAccountInfo(treasuryUsdcAta);
+      const transaction = new Transaction();
+
+      if (!treasuryAtaInfo) {
+        console.log('Creating treasury USDC ATA...');
+        const createAtaIx = createAssociatedTokenAccountInstruction(
+          creatorKey, // payer
+          treasuryUsdcAta, // ata
+          treasury, // owner
+          new PublicKey(USDC_MINT) // mint
+        );
+        transaction.add(createAtaIx);
+      }
+
+      // Build cancel_vault instruction
+      const cancelVaultIx = await program.methods
         .cancelVault()
         .accounts({
+          config: configPda,
           vault: vaultPdaKey,
           counter: counterPda,
           vaultTokenAccount,
           usdcMint: new PublicKey(USDC_MINT),
           creatorUsdcAta,
+          treasuryUsdcAta,
           creator: creatorKey,
           tokenProgram: TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: PublicKey.default,
         } as any)
-        .rpc();
+        .instruction();
+
+      transaction.add(cancelVaultIx);
+
+      // Set transaction metadata (required by wallet)
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = creatorKey;
+
+      // Sign and send transaction
+      const signed = await signTransaction(transaction);
+      const tx = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(tx, 'confirmed');
 
       console.log('Transaction signature:', tx);
       setTxSignature(tx);
@@ -148,6 +223,14 @@ export default function CancelVaultPage() {
         ...vault,
         cancelled: true,
         released: false,
+      });
+
+      // Add cancellation notification
+      addNotification({
+        type: 'vault_cancelled',
+        title: 'Vault Cancelled',
+        message: `Vault "${vault.name}" cancelled. Funds returned to your wallet.`,
+        vaultPda,
       });
 
       setSuccess(true);
@@ -260,11 +343,28 @@ export default function CancelVaultPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <div>
-              <h3 className="font-semibold text-amber-900 mb-1">Warning: This Action Cannot Be Undone</h3>
-              <p className="text-sm text-amber-800">
-                Cancelling this vault will permanently close it and return all funds to your wallet.
-                The beneficiary will not receive anything.
-              </p>
+              <h3 className="font-semibold text-amber-900 mb-1">Warning: Closing Fees May Apply</h3>
+              <div className="text-sm text-amber-800 space-y-2">
+                <p>
+                  Cancelling this vault will permanently close it and return all funds to your wallet.
+                  The beneficiary will not receive anything.
+                </p>
+                <p className="font-medium">
+                  <strong>Grace Period:</strong> Free cancellation within 48 hours of creation
+                </p>
+                <p>
+                  <strong>After Grace Period:</strong> Tier-based closing fees apply:
+                </p>
+                <ul className="list-disc ml-5 space-y-1">
+                  <li>Base: $1 USDC</li>
+                  <li>Plus: $5 USDC</li>
+                  <li>Premium: $10 USDC</li>
+                  <li>Lifetime: FREE</li>
+                </ul>
+                <p className="text-xs mt-2 italic">
+                  Note: Cannot cancel during the notification window (watchdog period)
+                </p>
+              </div>
             </div>
           </div>
         </div>

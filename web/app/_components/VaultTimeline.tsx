@@ -61,6 +61,11 @@ export function VaultTimeline({
   const currentColor = statusColors[status] || statusColors.locked;
 
   // Timeline phases
+  // Calculate effective unlock time (from statusInfo)
+  const effectiveUnlock = lastCheckinUnix > 0 
+    ? lastCheckinUnix + vaultPeriodSeconds 
+    : unlockUnix;
+
   const phases = [
     {
       key: 'locked',
@@ -82,7 +87,7 @@ export function VaultTimeline({
         </svg>
       ),
       color: 'amber',
-      time: unlockUnix,
+      time: effectiveUnlock,
     },
     {
       key: 'unlock',
@@ -117,7 +122,7 @@ export function VaultTimeline({
     currentPhaseIndex = 3; // Released
   } else if (now >= graceEndUnix) {
     currentPhaseIndex = 3; // Ready for release
-  } else if (now >= unlockUnix) {
+  } else if (now >= effectiveUnlock) {
     currentPhaseIndex = 2; // Grace period / Unlock
   } else if (now >= notificationStartUnix) {
     currentPhaseIndex = 1; // Notification window

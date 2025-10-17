@@ -24,6 +24,12 @@ export interface VaultMeta {
   beneficiary: string;
   creator: string;
   released?: boolean;
+  cancelled?: boolean;
+  tier?: number;
+  checkinPeriodSeconds?: number;
+  notificationWindowSeconds?: number;
+  gracePeriodSeconds?: number;
+  lastCheckinUnix?: number;
 }
 
 export interface ActivityLogEntry {

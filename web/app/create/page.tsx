@@ -5,31 +5,39 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { AmountInput } from '../_components/AmountInput';
 import { AddressInput } from '../_components/AddressInput';
-import { DateTimeInput } from '../_components/DateTimeInput';
 import { validateVaultForm, VaultFormData, isAdminWallet } from '../_lib/validation';
 import { formatDateTime } from '../_lib/format';
+import { getNetworkConfig, timeToSeconds, secondsToTime, formatTimeValue } from '../_lib/config';
 import { Identicon } from '../_components/Identicon';
 import { chunkAddress, getAddressLast4 } from '../_lib/identicon';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { saveVaultMeta, addActivityLog, updateLastSeen } from '../_lib/storage';
 import { connection, PROGRAM_ID, USDC_MINT } from '../_lib/solana';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { createVaultInstruction, depositUsdcInstruction } from '../_lib/instructions';
+import { createVaultInstruction, depositUsdcInstruction, VaultTier } from '../_lib/instructions';
+import { useNotifications } from '../_contexts/NotificationContext';
 
 type Step = 'form' | 'review' | 'processing' | 'success';
 
 export default function CreateVaultPage() {
   const { connected, publicKey, sendTransaction } = useWallet();
   const router = useRouter();
+  const { addNotification } = useNotifications();
 
   const [step, setStep] = useState<Step>('form');
+
+  // Get network config
+  const config = getNetworkConfig();
+
   const [formData, setFormData] = useState<VaultFormData>({
     name: '',
     amount: '',
     beneficiary: '',
-    unlockTime: '',
-    notificationWindowSeconds: 0, // Auto-calculated based on unlock time
-    gracePeriodSeconds: 0,         // Auto-calculated based on unlock time
+    checkinPeriodSeconds: 5 * 60, // Default: 5 minutes (devnet), will be updated based on network
+    tier: VaultTier.Base,          // Default: Base tier ($1)
+    creationFeePaid: 1_000_000,    // $1 USDC (6 decimals)
+    notificationWindowSeconds: 0,  // Auto-calculated based on check-in period
+    gracePeriodSeconds: 0,         // Auto-calculated based on check-in period
     creatorAddress: publicKey?.toBase58(),
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -60,65 +68,103 @@ export default function CreateVaultPage() {
     return null;
   }
 
-  const calculateDefaults = (unlockTime: string) => {
-    if (!unlockTime) return { notificationWindowSeconds: 0, gracePeriodSeconds: 0 };
+  // Preset check-in options with exact notification windows and grace periods
+  const checkinPresets = [
+    // Devnet only
+    { label: '5 minutes', seconds: 5 * 60, notificationWindow: 2 * 60, gracePeriod: 2 * 60, networks: ['devnet'] },
+    { label: '1 hour', seconds: 60 * 60, notificationWindow: 10 * 60, gracePeriod: 10 * 60, networks: ['devnet'] },
+    // Both networks
+    { label: '1 day', seconds: 24 * 60 * 60, notificationWindow: 60 * 60, gracePeriod: 60 * 60, networks: ['devnet', 'mainnet'] },
+    // Mainnet only
+    { label: '1 week', seconds: 7 * 24 * 60 * 60, notificationWindow: 24 * 60 * 60, gracePeriod: 24 * 60 * 60, networks: ['mainnet'] },
+    { label: '1 month', seconds: 30 * 24 * 60 * 60, notificationWindow: 7 * 24 * 60 * 60, gracePeriod: 3 * 24 * 60 * 60, networks: ['mainnet'] },
+    { label: '1 quarter (3 months)', seconds: 90 * 24 * 60 * 60, notificationWindow: 7 * 24 * 60 * 60, gracePeriod: 7 * 24 * 60 * 60, networks: ['mainnet'] },
+  ];
 
-    const unlockUnix = Math.floor(new Date(unlockTime).getTime() / 1000);
-    const nowUnix = Math.floor(Date.now() / 1000);
-    const vaultPeriodSeconds = unlockUnix - nowUnix;
+  // Filter presets based on current network
+  const availablePresets = checkinPresets.filter(preset =>
+    preset.networks.includes(config.network)
+  );
 
-    if (vaultPeriodSeconds <= 0) return { notificationWindowSeconds: 0, gracePeriodSeconds: 0 };
+  const calculateDefaults = (checkinPeriodSeconds: number) => {
+    if (!checkinPeriodSeconds || checkinPeriodSeconds <= 0) {
+      return { notificationWindowSeconds: 0, gracePeriodSeconds: 0 };
+    }
 
-    // CRITICAL: On-chain validation uses clock.unix_timestamp (at execution time),
-    // not client's calculation time. Combined with STRICT inequality (<, not <=),
-    // we must ensure notification_window < on_chain_vault_period even after worst-case delays.
-    //
-    // Worst-case delay breakdown:
-    // - Wallet approval time: 5-30 seconds
-    // - Transaction propagation on devnet: 5-30 seconds
-    // - On-chain execution delay: 1-10 seconds
-    // - Clock skew between client and blockchain: 0-30 seconds
-    // - Strict inequality buffer (must be strictly less, not equal): 10 seconds
-    // Total: conservatively use 130-second buffer for short test vaults
-    const maxDelaySeconds = 120; // Worst-case transaction delay
-    const strictInequalityBuffer = 10; // Extra buffer to ensure strict < passes
-    const totalSafetyBuffer = maxDelaySeconds + strictInequalityBuffer;
+    // Find matching preset for this check-in period
+    const preset = checkinPresets.find(p => p.seconds === checkinPeriodSeconds);
+    const notificationWindowSeconds = preset?.notificationWindow || Math.floor(checkinPeriodSeconds * 0.20);
 
-    const safeVaultPeriod = Math.max(0, vaultPeriodSeconds - totalSafetyBuffer);
-
-    // Use 20% to be even more conservative (was 25%)
-    const notificationWindowSeconds = Math.min(
-      7 * 24 * 60 * 60,
-      Math.max(1, Math.floor(safeVaultPeriod * 0.20))
-    );
-
-    const gracePeriodSeconds = Math.min(
-      7 * 24 * 60 * 60,
-      Math.max(1, Math.floor(safeVaultPeriod * 0.10))
+    // Use preset grace period if available, otherwise fall back to 10% of check-in period (max 7 days)
+    const gracePeriodSeconds = preset?.gracePeriod || Math.min(
+      7 * 24 * 60 * 60, // Max 7 days
+      Math.max(1, Math.floor(checkinPeriodSeconds * 0.10))
     );
 
     return { notificationWindowSeconds, gracePeriodSeconds };
   };
 
-  const handleInputChange = (field: keyof VaultFormData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-
-    // Auto-calculate notification window and grace period when unlock time changes
-    if (field === 'unlockTime' && !showAdvanced) {
-      const defaults = calculateDefaults(value);
-      setFormData(prev => ({
-        ...prev,
-        unlockTime: value,
-        notificationWindowSeconds: defaults.notificationWindowSeconds,
-        gracePeriodSeconds: defaults.gracePeriodSeconds,
-      }));
+  const handleInputChange = (field: keyof VaultFormData, value: string | number) => {
+    if (typeof value === 'string') {
+      setFormData(prev => ({ ...prev, [field]: value }));
+    } else {
+      setFormData(prev => ({ ...prev, [field]: value }));
     }
 
     // Clear error for this field
-    if (errors[field]) {
+    if (errors[field as string]) {
       setErrors(prev => {
         const newErrors = { ...prev };
-        delete newErrors[field];
+        delete newErrors[field as string];
+        return newErrors;
+      });
+    }
+  };
+
+  const handleTierChange = (tier: VaultTier) => {
+    // Calculate creation fee based on tier
+    const fees = {
+      [VaultTier.Base]: 1_000_000,      // $1
+      [VaultTier.Plus]: 8_000_000,      // $8
+      [VaultTier.Premium]: 20_000_000,  // $20
+      [VaultTier.Lifetime]: 100_000_000 // $100 (could be up to $500)
+    };
+
+    setFormData(prev => ({
+      ...prev,
+      tier,
+      creationFeePaid: fees[tier]
+    }));
+
+    // Clear error
+    if (errors.tier) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors.tier;
+        return newErrors;
+      });
+    }
+  };
+
+  const handleCheckinPeriodChange = (checkinPeriodSeconds: number) => {
+    // Auto-calculate notification window and grace period if not in advanced mode
+    if (!showAdvanced) {
+      const defaults = calculateDefaults(checkinPeriodSeconds);
+      setFormData(prev => ({
+        ...prev,
+        checkinPeriodSeconds,
+        notificationWindowSeconds: defaults.notificationWindowSeconds,
+        gracePeriodSeconds: defaults.gracePeriodSeconds,
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, checkinPeriodSeconds }));
+    }
+
+    // Clear error
+    if (errors.checkinPeriod) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors.checkinPeriod;
         return newErrors;
       });
     }
@@ -163,14 +209,12 @@ export default function CreateVaultPage() {
       // Use explicit program ID (no Anchor Program inference)
       const programId = new PublicKey(PROGRAM_ID);
 
-      // Parse unlock time to Unix timestamp
-      const unlockUnix = Math.floor(new Date(formData.unlockTime).getTime() / 1000);
-      const nowUnix = Math.floor(Date.now() / 1000);
-      const actualVaultPeriod = unlockUnix - nowUnix;
+      // Get check-in period and tier
+      const checkinPeriodSeconds = formData.checkinPeriodSeconds;
+      const tier = formData.tier;
+      const creationFeePaid = formData.creationFeePaid;
 
-      // CRITICAL: Recalculate notification window and grace period RIGHT NOW
-      // Don't use formData values as they may have been calculated minutes ago during form submission
-      // This ensures the values are based on the CURRENT time, not stale values
+      // Recalculate notification window and grace period if not in advanced mode
       let notificationWindowSeconds: number;
       let gracePeriodSeconds: number;
 
@@ -179,24 +223,22 @@ export default function CreateVaultPage() {
         notificationWindowSeconds = formData.notificationWindowSeconds;
         gracePeriodSeconds = formData.gracePeriodSeconds;
       } else {
-        // Auto-calculate based on CURRENT vault period
-        const defaults = calculateDefaults(formData.unlockTime);
+        // Auto-calculate based on check-in period
+        const defaults = calculateDefaults(checkinPeriodSeconds);
         notificationWindowSeconds = defaults.notificationWindowSeconds;
         gracePeriodSeconds = defaults.gracePeriodSeconds;
       }
 
       console.log('=== VAULT CREATION DEBUG ===');
-      console.log('Unlock Unix:', unlockUnix);
-      console.log('Now Unix:', nowUnix);
-      console.log('Actual vault period:', actualVaultPeriod, 'seconds');
+      console.log('Check-in period:', checkinPeriodSeconds, 'seconds (', Math.floor(checkinPeriodSeconds / 86400), 'days)');
+      console.log('Tier:', VaultTier[tier], '(', tier, ')');
+      console.log('Creation fee:', creationFeePaid / 1_000_000, 'USDC');
       console.log('Notification window:', notificationWindowSeconds, 'seconds');
       console.log('Grace period:', gracePeriodSeconds, 'seconds');
-      console.log('Validation check: notificationWindow < vaultPeriod?', notificationWindowSeconds, '<', actualVaultPeriod, '=', notificationWindowSeconds < actualVaultPeriod);
+      console.log('Validation check: notificationWindow < checkinPeriod?', notificationWindowSeconds, '<', checkinPeriodSeconds, '=', notificationWindowSeconds < checkinPeriodSeconds);
       console.log('🔍 Additional checks:');
       console.log('  - notification_window > 0?', notificationWindowSeconds > 0);
       console.log('  - grace_period > 0?', gracePeriodSeconds > 0);
-      console.log('  - notification_window + grace_period =', notificationWindowSeconds + gracePeriodSeconds, 'seconds');
-      console.log('  - Combined vs vault period:', (notificationWindowSeconds + gracePeriodSeconds), '<', actualVaultPeriod, '?', (notificationWindowSeconds + gracePeriodSeconds) < actualVaultPeriod);
 
       // Parse amount to lamports (USDC has 6 decimals)
       const amountLamports = Math.floor(parseFloat(formData.amount) * 1_000_000);
@@ -251,13 +293,10 @@ export default function CreateVaultPage() {
       );
 
       // Derive vault token account
-      const [vaultTokenAccount] = PublicKey.findProgramAddressSync(
-        [
-          vaultPda.toBuffer(),
-          TOKEN_PROGRAM_ID.toBuffer(),
-          new PublicKey(USDC_MINT).toBuffer(),
-        ],
-        ASSOCIATED_TOKEN_PROGRAM_ID
+      const vaultTokenAccount = await getAssociatedTokenAddress(
+        new PublicKey(USDC_MINT),
+        vaultPda,
+        true // allowOwnerOffCurve = true for PDA
       );
 
       // Get creator's USDC token account
@@ -270,7 +309,8 @@ export default function CreateVaultPage() {
       console.log('Program ID:', programId.toString());
       console.log('Vault PDA:', vaultPda.toString());
       console.log('Beneficiary:', formData.beneficiary);
-      console.log('Unlock Unix:', unlockUnix);
+      console.log('Check-in period:', checkinPeriodSeconds, 'seconds');
+      console.log('Tier:', VaultTier[tier]);
       console.log('Amount lamports:', amountLamports);
 
       // Build createVault instruction using manual instruction builder
@@ -282,10 +322,12 @@ export default function CreateVaultPage() {
         usdcMint: new PublicKey(USDC_MINT),
         creator: publicKey,
         beneficiary: new PublicKey(formData.beneficiary),
-        unlockUnix,
+        checkinPeriodSeconds,
         nameHash,
         notificationWindowSeconds,
         gracePeriodSeconds,
+        tier,
+        creationFeePaid,
         programId,
       });
 
@@ -339,17 +381,27 @@ export default function CreateVaultPage() {
       setVaultPda(vaultPda.toBase58());
       setTxSignature(signature);
 
+      // Calculate initial unlock time (created_at + checkin_period_seconds)
+      const nowUnix = Math.floor(Date.now() / 1000);
+      const initialUnlockUnix = nowUnix + checkinPeriodSeconds;
+
       // Save to local storage
       saveVaultMeta({
         vaultPda: vaultPda.toBase58(),
         name: formData.name,
         createdAt: Date.now(),
         lastRefreshed: Date.now(),
-        unlockUnix: unlockUnix,
+        unlockUnix: initialUnlockUnix,
         amountLocked: parseFloat(formData.amount) * 1_000_000,
         beneficiary: formData.beneficiary,
         creator: publicKey.toBase58(),
         released: false,
+        cancelled: false,
+        tier,
+        checkinPeriodSeconds,
+        notificationWindowSeconds,
+        gracePeriodSeconds,
+        lastCheckinUnix: 0, // Set to 0 for new vaults (no check-in yet)
       });
 
       addActivityLog({
@@ -358,6 +410,14 @@ export default function CreateVaultPage() {
         timestamp: Date.now(),
         signature,
         amount: parseFloat(formData.amount) * 1_000_000,
+      });
+
+      // Add success notification
+      addNotification({
+        type: 'vault_created',
+        title: 'Vault Created Successfully',
+        message: `${formData.amount} USDC locked in "${formData.name}". Remember to check in regularly!`,
+        vaultPda: vaultPda.toBase58(),
       });
 
       setStep('success');
@@ -377,9 +437,12 @@ export default function CreateVaultPage() {
       name: '',
       amount: '',
       beneficiary: '',
-      unlockTime: '',
-      notificationWindowSeconds: 7 * 24 * 60 * 60, // 7 days
-      gracePeriodSeconds: 7 * 24 * 60 * 60,         // 7 days
+      checkinPeriodSeconds: 5 * 60,      // Default: 5 minutes
+      tier: VaultTier.Base,              // Base tier
+      creationFeePaid: 1_000_000,        // $1
+      notificationWindowSeconds: 0,      // Auto-calculated
+      gracePeriodSeconds: 0,             // Auto-calculated
+      creatorAddress: publicKey?.toBase58(),
     });
     setErrors({});
     setTxSignature('');
@@ -403,7 +466,7 @@ export default function CreateVaultPage() {
             )}
           </div>
           <p className="text-warm-600">
-            Lock USDC for your beneficiary with a time-locked release
+            Create a dead man's switch vault with recurring check-ins
             {isAdmin && ' • Testing mode: 2min minimum, self-beneficiary allowed'}
           </p>
         </div>
@@ -450,12 +513,94 @@ export default function CreateVaultPage() {
                 error={errors.amount}
               />
 
-              {/* Unlock Time */}
-              <DateTimeInput
-                value={formData.unlockTime}
-                onChange={(val) => handleInputChange('unlockTime', val)}
-                error={errors.unlockTime}
-              />
+              {/* Tier Selector */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-warm-700">
+                  Vault Tier
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { tier: VaultTier.Base, name: 'Base', price: '$1', color: 'blue' },
+                    { tier: VaultTier.Plus, name: 'Plus', price: '$8', color: 'purple' },
+                    { tier: VaultTier.Premium, name: 'Premium', price: '$20', color: 'orange' },
+                    { tier: VaultTier.Lifetime, name: 'Lifetime', price: '$100', color: 'emerald' },
+                  ].map(({ tier, name, price, color }) => (
+                    <button
+                      key={tier}
+                      type="button"
+                      onClick={() => handleTierChange(tier)}
+                      className={`p-4 rounded-lg border-2 text-left transition-all ${
+                        formData.tier === tier
+                          ? `border-${color}-500 bg-${color}-50`
+                          : 'border-warm-200 hover:border-warm-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-warm-900">{name}</div>
+                      <div className="text-sm text-warm-600 mt-1">Creation fee: {price}</div>
+                    </button>
+                  ))}
+                </div>
+                {errors.tier && (
+                  <p className="text-sm text-rose-600 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {errors.tier}
+                  </p>
+                )}
+                <p className="text-xs text-warm-500">
+                  Higher tiers have lower closing fees and additional perks
+                </p>
+              </div>
+
+              {/* Check-in Period */}
+              <div className="space-y-2">
+                <label htmlFor="checkinPeriod" className="block text-sm font-medium text-warm-700">
+                  Check-In Frequency
+                  {config.network === 'devnet' && (
+                    <span className="ml-2 px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-semibold rounded">
+                      DEVNET
+                    </span>
+                  )}
+                </label>
+                <select
+                  id="checkinPeriod"
+                  value={formData.checkinPeriodSeconds}
+                  onChange={(e) => handleCheckinPeriodChange(parseInt(e.target.value))}
+                  className={`w-full px-4 py-3 bg-white border rounded-lg text-warm-900 focus:outline-none focus:ring-2 transition-all duration-200 ${
+                    errors.checkinPeriod
+                      ? 'border-rose-500 focus:ring-rose-500 bg-rose-50'
+                      : 'border-warm-200 focus:ring-sage-600 focus:border-sage-600'
+                  }`}
+                >
+                  {availablePresets.map((preset) => {
+                    const windowMinutes = preset.notificationWindow >= 60
+                      ? preset.notificationWindow >= 3600
+                        ? preset.notificationWindow >= 86400
+                          ? `${preset.notificationWindow / 86400} day`
+                          : `${preset.notificationWindow / 3600} hour`
+                        : `${preset.notificationWindow / 60} min`
+                      : `${preset.notificationWindow} sec`;
+
+                    return (
+                      <option key={preset.seconds} value={preset.seconds}>
+                        {preset.label} (check-in window: final {windowMinutes})
+                      </option>
+                    );
+                  })}
+                </select>
+                {errors.checkinPeriod && (
+                  <p className="text-sm text-rose-600 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {errors.checkinPeriod}
+                  </p>
+                )}
+                <p className="text-xs text-warm-500">
+                  How often you need to check in. If you miss a check-in, funds will be released to beneficiary after the grace period.
+                </p>
+              </div>
 
               {/* Beneficiary */}
               <AddressInput
@@ -493,13 +638,13 @@ export default function CreateVaultPage() {
               {showAdvanced && (
                 <div className="p-6 bg-white space-y-6 border-t border-warm-200">
                   <p className="text-sm text-warm-600 -mt-2">
-                    Configure check-in periods. Leave blank to use recommended defaults based on vault duration.
+                    Customize notification window and grace period. Leave blank to use recommended defaults (20% and 10% of check-in period).
                   </p>
 
                   {/* Notification Window */}
                   <div className="space-y-2">
                     <label htmlFor="notificationWindow" className="block text-sm font-medium text-warm-700">
-                      Check-In Period (seconds)
+                      Notification Window (seconds)
                     </label>
                     <input
                       id="notificationWindow"
@@ -507,12 +652,12 @@ export default function CreateVaultPage() {
                       min="1"
                       value={formData.notificationWindowSeconds || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, notificationWindowSeconds: parseInt(e.target.value) || 0 }))}
-                      placeholder={formData.unlockTime ? calculateDefaults(formData.unlockTime).notificationWindowSeconds.toString() : ''}
+                      placeholder={formData.checkinPeriodSeconds ? calculateDefaults(formData.checkinPeriodSeconds).notificationWindowSeconds.toString() : ''}
                       className="w-full px-4 py-3 bg-white border border-warm-200 rounded-lg text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-sage-600 focus:border-sage-600 transition-all duration-200"
                     />
                     <p className="text-xs text-warm-500">
-                      How often you need to check in. If you don't check in for this duration, the vault can be released early.
-                      {formData.unlockTime && ` (Recommended: ${Math.floor(calculateDefaults(formData.unlockTime).notificationWindowSeconds / 60)} minutes)`}
+                      Window before unlock when you can check in to reset the timer.
+                      {formData.checkinPeriodSeconds > 0 && ` (Recommended: ${formatTimeValue(secondsToTime(calculateDefaults(formData.checkinPeriodSeconds).notificationWindowSeconds))})`}
                     </p>
                   </div>
 
@@ -527,12 +672,12 @@ export default function CreateVaultPage() {
                       min="1"
                       value={formData.gracePeriodSeconds || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, gracePeriodSeconds: parseInt(e.target.value) || 0 }))}
-                      placeholder={formData.unlockTime ? calculateDefaults(formData.unlockTime).gracePeriodSeconds.toString() : ''}
+                      placeholder={formData.checkinPeriodSeconds ? calculateDefaults(formData.checkinPeriodSeconds).gracePeriodSeconds.toString() : ''}
                       className="w-full px-4 py-3 bg-white border border-warm-200 rounded-lg text-warm-900 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-sage-600 focus:border-sage-600 transition-all duration-200"
                     />
                     <p className="text-xs text-warm-500">
-                      Extra time given after a missed check-in before the vault can be released.
-                      {formData.unlockTime && ` (Recommended: ${Math.floor(calculateDefaults(formData.unlockTime).gracePeriodSeconds / 60)} minutes)`}
+                      Extra time after missed check-in before funds can be released.
+                      {formData.checkinPeriodSeconds > 0 && ` (Recommended: ${formatTimeValue(secondsToTime(calculateDefaults(formData.checkinPeriodSeconds).gracePeriodSeconds))})`}
                     </p>
                   </div>
                 </div>
@@ -578,9 +723,26 @@ export default function CreateVaultPage() {
                 </div>
 
                 <div>
-                  <p className="text-sm text-warm-500 mb-1">Unlock Date & Time</p>
+                  <p className="text-sm text-warm-500 mb-1">Vault Tier</p>
                   <p className="text-lg font-semibold text-warm-900">
-                    {formatDateTime(Math.floor(new Date(formData.unlockTime).getTime() / 1000))}
+                    {['Base', 'Plus', 'Premium', 'Lifetime'][formData.tier]} (${formData.creationFeePaid / 1_000_000} creation fee)
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-sm text-warm-500 mb-1">Check-In Period</p>
+                  <p className="text-lg font-semibold text-warm-900">
+                    Every {formatTimeValue(secondsToTime(formData.checkinPeriodSeconds))}
+                  </p>
+                  <p className="text-xs text-warm-500 mt-1">
+                    You must check in within this period to keep funds locked. Miss a check-in and funds can be released to beneficiary.
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-sm text-warm-500 mb-1">First Check-In Deadline</p>
+                  <p className="text-lg font-semibold text-warm-900">
+                    {formatDateTime(Math.floor(Date.now() / 1000) + formData.checkinPeriodSeconds)}
                   </p>
                 </div>
 
@@ -589,7 +751,7 @@ export default function CreateVaultPage() {
                   <div className="flex items-center gap-3 p-3 bg-white rounded-lg border border-warm-200">
                     <Identicon address={formData.beneficiary} size={56} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-warm-500 mb-1">Will receive funds after unlock</p>
+                      <p className="text-xs font-medium text-warm-500 mb-1">Will receive funds if you miss check-in</p>
                       <p className="text-sm font-mono text-warm-900 break-all leading-relaxed">
                         {chunkAddress(formData.beneficiary)}
                       </p>
@@ -644,8 +806,8 @@ export default function CreateVaultPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                   <div className="text-sm text-amber-900">
-                    <p className="font-semibold mb-1">Important</p>
-                    <p className="text-amber-800">Once locked, funds cannot be accessed until the unlock time. Double-check the beneficiary address and unlock time.</p>
+                    <p className="font-semibold mb-1">Important: Dead Man's Switch</p>
+                    <p className="text-amber-800">You must check in regularly to keep funds locked. If you miss a check-in, funds will be released to the beneficiary after the grace period. Double-check the beneficiary address and check-in period.</p>
                   </div>
                 </div>
               </div>
@@ -700,7 +862,7 @@ export default function CreateVaultPage() {
               </div>
               <div>
                 <h2 className="text-2xl font-bold mb-2 text-warm-900">Vault Created Successfully!</h2>
-                <p className="text-warm-600">Your funds are now locked and will be released to the beneficiary after the unlock time.</p>
+                <p className="text-warm-600">Your dead man's switch vault is now active. Remember to check in regularly to keep funds locked.</p>
               </div>
 
               {/* Details */}

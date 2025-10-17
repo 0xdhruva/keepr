@@ -1,11 +1,12 @@
 [toolchain]
+anchor_version = "0.30.1"
 
 [features]
 resolution = true
 skip-lint = false
 
 [programs.devnet]
-keepr_vault = "74v7NZh7A6SH9DmKZRC4tFUwaLvq19KfD1NGni62XQJK"
+keepr_vault = "Aw5FwXAnbzB6e7A5zrw8G244VnwW3vV3Uz5rrDFt6ipj"
 
 [registry]
 url = "https://api.apr.dev"

@@ -9,6 +9,7 @@ import { connection, PROGRAM_ID, USDC_MINT } from '../../../_lib/solana';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { releaseInstruction } from '../../../_lib/instructions';
+import { useNotifications } from '../../../_contexts/NotificationContext';
 import Link from 'next/link';
 
 type Step = 'confirm' | 'processing' | 'success' | 'error';
@@ -27,6 +28,7 @@ export default function ReleasePage() {
   const router = useRouter();
   const params = useParams();
   const vaultPda = params.vaultPda as string;
+  const { addNotification } = useNotifications();
 
   const [step, setStep] = useState<Step>('confirm');
   const [vault, setVault] = useState<VaultInfo | null>(null);
@@ -180,6 +182,14 @@ export default function ReleasePage() {
         timestamp: Date.now(),
         signature,
         amount: vault.amountLocked,
+      });
+
+      // Add release notification
+      addNotification({
+        type: 'vault_released',
+        title: 'Vault Released',
+        message: `${formatUSDC(vault.amountLocked)} released from vault "${vault.name}" to beneficiary.`,
+        vaultPda,
       });
 
       setStep('success');

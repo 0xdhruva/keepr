@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("74v7NZh7A6SH9DmKZRC4tFUwaLvq19KfD1NGni62XQJK");
+declare_id!("Aw5FwXAnbzB6e7A5zrw8G244VnwW3vV3Uz5rrDFt6ipj");
 
 /// Minimum time buffer before unlock (5 minutes)
 pub const MIN_UNLOCK_BUFFER: i64 = 300;
@@ -17,6 +17,7 @@ pub mod keepr_vault {
         usdc_mint: Pubkey,
         max_lock_per_vault: u64,
         paused: bool,
+        treasury: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
@@ -24,6 +25,7 @@ pub mod keepr_vault {
         config.max_lock_per_vault = max_lock_per_vault;
         config.paused = paused;
         config.admin_test_wallets = Vec::new();
+        config.treasury = treasury;
 
         emit!(ConfigUpdated {
             admin: config.admin,
@@ -108,10 +110,12 @@ pub mod keepr_vault {
     pub fn create_vault(
         ctx: Context<CreateVault>,
         beneficiary: Pubkey,
-        unlock_unix: i64,
+        checkin_period_seconds: u32,
         name_hash: [u8; 32],
         notification_window_seconds: u32,
         grace_period_seconds: u32,
+        tier: VaultTier,
+        creation_fee_paid: u64,
     ) -> Result<()> {
         let config = &ctx.accounts.config;
         let vault = &mut ctx.accounts.vault;
@@ -142,15 +146,12 @@ pub mod keepr_vault {
         // Increment counter
         counter.last_id = vault_id;
 
-        // Calculate vault period from creation to unlock
-        let vault_period_seconds_i64 = unlock_unix
-            .checked_sub(clock.unix_timestamp)
-            .ok_or(KeeprError::Overflow)?;
-
-        // Validate and cast to u32
-        require!(vault_period_seconds_i64 > 0, KeeprError::InvalidUnlockTime);
-        let vault_period_seconds = u32::try_from(vault_period_seconds_i64)
-            .map_err(|_| KeeprError::Overflow)?;
+        // Validate check-in period (must be positive and reasonable)
+        require!(checkin_period_seconds > 0, KeeprError::InvalidCheckinPeriod);
+        require!(
+            checkin_period_seconds <= 31536000, // Max 1 year
+            KeeprError::InvalidCheckinPeriod
+        );
 
         // Validate dead man's switch parameters
         require!(
@@ -158,13 +159,19 @@ pub mod keepr_vault {
             KeeprError::InvalidNotificationWindow
         );
         require!(
-            notification_window_seconds < vault_period_seconds,
+            notification_window_seconds < checkin_period_seconds,
             KeeprError::InvalidNotificationWindow
         );
         require!(
             grace_period_seconds > 0,
             KeeprError::InvalidGracePeriod
         );
+
+        // Calculate initial unlock time (creation time + checkin period)
+        let unlock_unix = clock
+            .unix_timestamp
+            .checked_add(checkin_period_seconds.into())
+            .ok_or(KeeprError::Overflow)?;
 
         // Initialize vault
         vault.creator = ctx.accounts.creator.key();
@@ -179,10 +186,14 @@ pub mod keepr_vault {
         vault.bump = ctx.bumps.vault;
         vault.name_hash = name_hash;
         vault.vault_id = vault_id;
-        vault.vault_period_seconds = vault_period_seconds;
+        vault.vault_period_seconds = checkin_period_seconds; // Use checkin period as vault period
         vault.notification_window_seconds = notification_window_seconds;
         vault.grace_period_seconds = grace_period_seconds;
-        vault.last_checkin_unix = clock.unix_timestamp;
+        vault.last_checkin_unix = 0; // Set to 0 on creation (not yet checked in)
+        vault.tier = tier;
+        vault.created_at = clock.unix_timestamp;
+        vault.creation_fee_paid = creation_fee_paid;
+        vault.checkin_period_seconds = checkin_period_seconds;
 
         emit!(VaultCreated {
             creator: vault.creator,
@@ -244,6 +255,7 @@ pub mod keepr_vault {
 
         // Safety checks
         require!(!vault.released, KeeprError::AlreadyReleased);
+        require!(!vault.cancelled, KeeprError::VaultAlreadyCancelled);
 
         // Calculate notification window start time
         let notification_start = vault
@@ -268,10 +280,10 @@ pub mod keepr_vault {
             KeeprError::AlreadyReleased
         );
 
-        // Reset unlock time by adding vault period
+        // Reset unlock time using checkin_period (rolling deadline)
         vault.unlock_unix = clock
             .unix_timestamp
-            .checked_add(vault.vault_period_seconds.into())
+            .checked_add(vault.checkin_period_seconds.into())
             .ok_or(KeeprError::Overflow)?;
 
         // Update last check-in timestamp
@@ -344,27 +356,47 @@ pub mod keepr_vault {
     /// Cancel vault and return funds to creator (creator only, before release)
     pub fn cancel_vault(ctx: Context<CancelVault>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
+        let clock = Clock::get()?;
 
         // Safety checks
         require!(!vault.released, KeeprError::CannotCancelAfterRelease);
         require!(!vault.cancelled, KeeprError::VaultAlreadyCancelled);
 
-        let amount = vault.amount_locked;
+        // Calculate notification window start time (watchdog period starts here)
+        let notification_start = vault
+            .unlock_unix
+            .checked_sub(vault.notification_window_seconds.into())
+            .ok_or(KeeprError::Overflow)?;
 
-        // Only transfer if there are funds
-        if amount > 0 {
-            let creator_key = vault.creator;
-            let vault_id = vault.vault_id;
-            let vault_bump = vault.bump;
+        // Cannot cancel during watchdog period (prevents gaming the system)
+        require!(
+            clock.unix_timestamp < notification_start,
+            KeeprError::CannotCancelDuringWatchdog
+        );
 
-            let seeds = &[
-                b"vault",
-                creator_key.as_ref(),
-                &vault_id.to_le_bytes(),
-                &[vault_bump],
-            ];
-            let signer = &[&seeds[..]];
+        // Calculate closing fee based on tier (NO free grace period)
+        let closing_fee = match vault.tier {
+            VaultTier::Base => 1_000_000,      // $1 USDC (6 decimals)
+            VaultTier::Plus => 5_000_000,      // $5 USDC
+            VaultTier::Premium => 10_000_000,  // $10 USDC
+            VaultTier::Lifetime => 0,          // FREE (white-glove perk)
+        };
 
+        let vault_funds = vault.amount_locked;
+        let creator_key = vault.creator;
+        let vault_id = vault.vault_id;
+        let vault_bump = vault.bump;
+
+        let seeds = &[
+            b"vault",
+            creator_key.as_ref(),
+            &vault_id.to_le_bytes(),
+            &[vault_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+        // Return vault funds to creator (if any)
+        if vault_funds > 0 {
             let cpi_accounts = Transfer {
                 from: ctx.accounts.vault_token_account.to_account_info(),
                 to: ctx.accounts.creator_usdc_ata.to_account_info(),
@@ -372,7 +404,26 @@ pub mod keepr_vault {
             };
             let cpi_program = ctx.accounts.token_program.to_account_info();
             let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-            token::transfer(cpi_ctx, amount)?;
+            token::transfer(cpi_ctx, vault_funds)?;
+        }
+
+        // Collect closing fee (if applicable)
+        if closing_fee > 0 {
+            // Check creator has enough USDC for closing fee
+            require!(
+                ctx.accounts.creator_usdc_ata.amount >= closing_fee,
+                KeeprError::InsufficientBalanceForClosingFee
+            );
+
+            // Transfer closing fee from creator to treasury
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.creator_usdc_ata.to_account_info(),
+                to: ctx.accounts.treasury_usdc_ata.to_account_info(),
+                authority: ctx.accounts.creator.to_account_info(),
+            };
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+            token::transfer(cpi_ctx, closing_fee)?;
         }
 
         vault.cancelled = true;
@@ -381,7 +432,9 @@ pub mod keepr_vault {
         emit!(VaultCancelled {
             vault: vault.key(),
             creator: vault.creator,
-            amount_refunded: amount,
+            amount_refunded: vault_funds,
+            closing_fee_paid: closing_fee,
+            in_grace_period: false, // No longer used - all cancellations are paid
         });
 
         Ok(())
@@ -584,7 +637,8 @@ pub struct Release<'info> {
     pub counter: Account<'info, VaultCounter>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = payer,
         associated_token::mint = usdc_mint,
         associated_token::authority = vault
     )]
@@ -614,26 +668,29 @@ pub struct Release<'info> {
 
 #[derive(Accounts)]
 pub struct CancelVault<'info> {
+    #[account(seeds = [b"config"], bump)]
+    pub config: Box<Account<'info, Config>>,
+
     #[account(
         mut,
         seeds = [b"vault", creator.key().as_ref(), &vault.vault_id.to_le_bytes()],
         bump = vault.bump,
         has_one = creator
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(seeds = [b"vault_counter", creator.key().as_ref()], bump)]
-    pub counter: Account<'info, VaultCounter>,
+    pub counter: Box<Account<'info, VaultCounter>>,
 
     #[account(
         mut,
         associated_token::mint = usdc_mint,
         associated_token::authority = vault
     )]
-    pub vault_token_account: Account<'info, TokenAccount>,
+    pub vault_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(address = vault.usdc_mint)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     #[account(
         init_if_needed,
@@ -641,7 +698,14 @@ pub struct CancelVault<'info> {
         associated_token::mint = usdc_mint,
         associated_token::authority = creator
     )]
-    pub creator_usdc_ata: Account<'info, TokenAccount>,
+    pub creator_usdc_ata: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = config.treasury
+    )]
+    pub treasury_usdc_ata: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
     pub creator: Signer<'info>,
@@ -716,6 +780,15 @@ pub struct CloseConfig<'info> {
 // State
 // ============================================================================
 
+/// Vault pricing tier
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace)]
+pub enum VaultTier {
+    Base,      // $1 creation, $1 closing fee
+    Plus,      // $8 creation, $5 closing fee
+    Premium,   // $20 creation, $10 closing fee
+    Lifetime,  // $100-$500 creation, FREE closing
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -725,6 +798,7 @@ pub struct Config {
     pub paused: bool,
     #[max_len(10)]
     pub admin_test_wallets: Vec<Pubkey>,
+    pub treasury: Pubkey,  // Treasury wallet for closing fees
 }
 
 #[account]
@@ -752,6 +826,11 @@ pub struct Vault {
     pub notification_window_seconds: u32,  // Max ~136 years in seconds
     pub grace_period_seconds: u32,         // Max ~136 years in seconds
     pub last_checkin_unix: i64,
+    // New fields for dead man's switch model
+    pub tier: VaultTier,           // Pricing tier (Base/Plus/Premium/Lifetime)
+    pub created_at: i64,           // Creation timestamp for grace period calculation
+    pub creation_fee_paid: u64,    // Original creation fee (for analytics/refunds)
+    pub checkin_period_seconds: u32, // Recurring check-in period (replaces fixed unlock)
 }
 
 // ============================================================================
@@ -796,6 +875,8 @@ pub struct VaultCancelled {
     pub vault: Pubkey,
     pub creator: Pubkey,
     pub amount_refunded: u64,
+    pub closing_fee_paid: u64,
+    pub in_grace_period: bool,
 }
 
 // ============================================================================
@@ -842,4 +923,10 @@ pub enum KeeprError {
     CannotCancelAfterRelease,
     #[msg("Admin test wallets list cannot exceed 10 wallets.")]
     AdminTestWalletsLimitExceeded,
+    #[msg("Cannot cancel during watchdog period - prevents gaming the system.")]
+    CannotCancelDuringWatchdog,
+    #[msg("Insufficient USDC balance to pay closing fee.")]
+    InsufficientBalanceForClosingFee,
+    #[msg("Invalid check-in period - must be between 1 second and 1 year.")]
+    InvalidCheckinPeriod,
 }

@@ -62,7 +62,11 @@ export function getVaultStatus(vault: VaultData, nowUnix?: number): VaultStatusI
   }
 
   // Calculate key timestamps
-  const effectiveUnlock = vault.lastCheckinUnix > 0 ? vault.lastCheckinUnix : vault.unlockUnix;
+  // If user has checked in, deadline = last_checkin + checkin_period
+  // If never checked in (lastCheckinUnix === 0), deadline = initial unlock_unix
+  const effectiveUnlock = vault.lastCheckinUnix > 0 
+    ? vault.lastCheckinUnix + vault.vaultPeriodSeconds 
+    : vault.unlockUnix;
   const notificationStartUnix = effectiveUnlock - vault.notificationWindowSeconds;
   const graceEndUnix = effectiveUnlock + vault.gracePeriodSeconds;
 

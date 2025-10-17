@@ -8,6 +8,7 @@ import { TopBar } from "./_components/TopBar";
 import { SlideOutMenu } from "./_components/SlideOutMenu";
 import { BottomNav } from "./_components/BottomNav";
 import { NotificationPanel } from "./_components/NotificationPanel";
+import { NotificationPoller } from "./_components/NotificationPoller";
 import { NotificationProvider } from "./_contexts/NotificationContext";
 import { useState } from "react";
 
@@ -42,6 +43,9 @@ export default function RootLayout({
       >
         <WalletProvider>
           <NotificationProvider>
+            {/* Background notification poller */}
+            <NotificationPoller />
+
             {/* Desktop Header */}
             <Header />
 

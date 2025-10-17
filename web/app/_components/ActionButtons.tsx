@@ -1,9 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 
 interface ActionButtonsProps {
@@ -11,29 +11,34 @@ interface ActionButtonsProps {
 }
 
 export function ActionButtons({ onTutorialClick }: ActionButtonsProps) {
-  const router = useRouter();
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
-  const waitingForConnection = useRef(false);
+  const router = useRouter();
+  const pendingRedirect = useRef<string | null>(null);
 
+  // Redirect after wallet connects
   useEffect(() => {
-    if (connected && waitingForConnection.current) {
-      waitingForConnection.current = false;
-      router.push('/create');
+    if (connected && pendingRedirect.current) {
+      const redirect = pendingRedirect.current;
+      pendingRedirect.current = null;
+      router.push(redirect);
     }
   }, [connected, router]);
+
+  const handleActionClick = (href: string) => (e: React.MouseEvent) => {
+    if (!connected) {
+      e.preventDefault();
+      pendingRedirect.current = href;
+      setVisible(true);
+    }
+  };
 
   const handleNewVaultClick = () => {
     if (connected) {
       router.push('/create');
     } else {
-      waitingForConnection.current = true;
-      try {
-        setVisible(true);
-      } catch (error) {
-        // User rejected wallet connection - reset flag
-        waitingForConnection.current = false;
-      }
+      pendingRedirect.current = '/create';
+      setVisible(true);
     }
   };
 
@@ -75,6 +80,7 @@ export function ActionButtons({ onTutorialClick }: ActionButtonsProps) {
           <Link
             key={action.label}
             href={action.href}
+            onClick={handleActionClick(action.href)}
             className="flex flex-col items-center gap-2 group"
           >
             <div className="w-14 h-14 bg-white rounded-full shadow-md flex items-center justify-center group-hover:shadow-lg group-hover:scale-105 transition-all duration-200 border border-gray-200">

@@ -8,6 +8,7 @@ import { getVaultMeta } from '../../../_lib/storage';
 import { connection, PROGRAM_ID } from '../../../_lib/solana';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { checkInInstruction } from '../../../_lib/instructions';
+import { useNotifications } from '../../../_contexts/NotificationContext';
 import Link from 'next/link';
 
 type Step = 'confirm' | 'processing' | 'success' | 'error';
@@ -17,6 +18,7 @@ export default function CheckInPage() {
   const router = useRouter();
   const params = useParams();
   const vaultPda = params.vaultPda as string;
+  const { addNotification } = useNotifications();
 
   const [step, setStep] = useState<Step>('confirm');
   const [vaultName, setVaultName] = useState<string>('Vault');
@@ -88,6 +90,15 @@ export default function CheckInPage() {
 
       await connection.confirmTransaction(signature, 'confirmed');
       setTxSignature(signature);
+
+      // Add success notification
+      addNotification({
+        type: 'checkin_success',
+        title: 'Check-in Successful',
+        message: `Successfully checked in for vault "${vaultName}". Next deadline extended.`,
+        vaultPda,
+      });
+
       setStep('success');
     } catch (error: any) {
       console.error('Check-in failed:', error);
